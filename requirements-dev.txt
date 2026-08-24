@@ -1,0 +1,4 @@
+# Dependencias para ejecutar los tests (no necesarias en runtime).
+# Instalar con: pip install -r requirements-dev.txt
+pytest>=8.0
+pytest-asyncio>=0.24
