@@ -1,0 +1,24 @@
+# API
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.12
+pydantic[email]>=2.9
+pydantic-settings>=2.6
+
+# Auth
+pyjwt>=2.10
+passlib[bcrypt]>=1.7.4
+
+# Extracción PDF
+pdfplumber>=0.11
+pymupdf>=1.24
+
+# Matching
+rapidfuzz>=3.10
+jellyfish>=1.0
+
+# Email
+aiosmtplib>=3.0
+
+# Utils
+python-dotenv>=1.0

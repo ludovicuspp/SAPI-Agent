@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Node / Dashboard
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+dashboard/.env
+dashboard/.env.local
+npm-debug.log*
+
+# Entorno
+.env
+.env.local
+.env.*.local
+*.log
+
+# Datos locales (SQLite + uploads)
+data/sapi.db
+data/sapi.db-*
+data/uploads/*
+!data/uploads/.gitkeep
+data/hermes_runs/*
+!data/hermes_runs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
