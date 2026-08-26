@@ -109,6 +109,10 @@ class BoletinOut(BaseModel):
     uploaded_at: datetime
     processed_at: Optional[datetime]
     error: Optional[str]
+    entries_matcheables: int = 0
+    entries_hermes_pending: int = 0
+    entries_figura: int = 0
+    entries_lema: int = 0
 
 
 # ── detections ─────────────────────────────────────────────────
@@ -132,6 +136,11 @@ class DetectionOut(BaseModel):
     raw_excerpt: Optional[str]
     detected_at: datetime
     notified_email: bool
+    pais: Optional[str] = None
+    fecha_inscripcion: Optional[str] = None
+    fuente_parsing: Optional[str] = None
+    es_figura: bool = False
+    es_lema: bool = False
 
 
 # ── /api/structured (Hermes → API) ────────────────────────────

@@ -226,12 +226,18 @@ def cmd_process_boletin(args):
         conn.commit()
         print(
             f"OK: boletín procesado (id={result.boletin_id})\n"
-            f"  Boletín:      #{result.bulletin_number or '?'} ({result.period or '?'})\n"
+            f"  Boletín:      #{result.bulletin_number or '?'} "
+            f"({result.period or '?'}) Tomo {result.tomo or '?'}\n"
             f"  Páginas:      {result.pages_extracted}/{result.pages_total}\n"
-            f"  Entries:      {result.entries_parsed}\n"
+            f"  Entries:      {result.entries_parsed} "
+            f"(matcheables: {result.entries_matcheables}, "
+            f"figura: {result.entries_figura}, "
+            f"lema: {result.entries_lema}, "
+            f"hermes: {result.entries_hermes_pending})\n"
             f"  Detecciones:  {result.detections_created}\n"
             f"  Hermes pend.: {'sí' if result.needs_hermes_review else 'no'}\n"
-            f"  Emails:       {result.emailed} enviados, {result.email_failed} fallidos\n"
+            f"  Emails:       {result.emailed} enviados, "
+            f"{result.email_failed} fallidos\n"
             f"  Duración:     {result.duration_ms} ms"
         )
     except FileNotFoundError as e:

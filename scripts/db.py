@@ -72,7 +72,11 @@ CREATE TABLE IF NOT EXISTS boletines (
     hermes_error TEXT,
     error TEXT,
     uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
-    processed_at TEXT
+    processed_at TEXT,
+    entries_matcheables INTEGER NOT NULL DEFAULT 0,
+    entries_hermes_pending INTEGER NOT NULL DEFAULT 0,
+    entries_figura INTEGER NOT NULL DEFAULT 0,
+    entries_lema INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_boletines_status ON boletines(status);
 CREATE INDEX IF NOT EXISTS idx_boletines_needs_hermes
@@ -99,7 +103,12 @@ CREATE TABLE IF NOT EXISTS detections (
     raw_excerpt TEXT,
     detected_at TEXT NOT NULL DEFAULT (datetime('now')),
     notified_email INTEGER NOT NULL DEFAULT 0,
-    notified_at TEXT
+    notified_at TEXT,
+    pais TEXT,
+    fecha_inscripcion TEXT,
+    fuente_parsing TEXT,
+    es_figura INTEGER NOT NULL DEFAULT 0,
+    es_lema INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_detections_user ON detections(user_id);
 CREATE INDEX IF NOT EXISTS idx_detections_boletin ON detections(boletin_id);
@@ -132,11 +141,45 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: str | Path) -> None:
-    """Crea el esquema si no existe. Idempotente."""
+    """Crea el esquema si no existe. Idempotente.
+
+    Aplica también ``ALTER TABLE ADD COLUMN`` para añadir columnas que
+    puedan faltar en bases de datos creadas con versiones anteriores
+    (Fase 2 original). Esto permite actualizar la BD en caliente sin
+    perder datos.
+    """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with connect(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
+        _migrate_add_columns(conn)
         conn.commit()
+
+
+def _migrate_add_columns(conn: sqlite3.Connection) -> None:
+    """Añade columnas que pueden faltar en BD creadas con Fase 2.0.
+
+    Usa try/except OperationalError para que sea idempotente: si la
+    columna ya existe, SQLite devuelve un error que ignoramos.
+    """
+    migrations = [
+        ("boletines", "entries_matcheables", "INTEGER NOT NULL DEFAULT 0"),
+        ("boletines", "entries_hermes_pending", "INTEGER NOT NULL DEFAULT 0"),
+        ("boletines", "entries_figura", "INTEGER NOT NULL DEFAULT 0"),
+        ("boletines", "entries_lema", "INTEGER NOT NULL DEFAULT 0"),
+        ("detections", "pais", "TEXT"),
+        ("detections", "fecha_inscripcion", "TEXT"),
+        ("detections", "fuente_parsing", "TEXT"),
+        ("detections", "es_figura", "INTEGER NOT NULL DEFAULT 0"),
+        ("detections", "es_lema", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    for table, column, typedef in migrations:
+        try:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {typedef}"
+            )
+        except sqlite3.OperationalError:
+            # La columna ya existe; ignorar.
+            pass
 
 
 @contextmanager
@@ -338,6 +381,10 @@ class BoletinRow:
     error: Optional[str]
     uploaded_at: str
     processed_at: Optional[str]
+    entries_matcheables: int = 0
+    entries_hermes_pending: int = 0
+    entries_figura: int = 0
+    entries_lema: int = 0
 
 
 def _boletin_from_row(row: sqlite3.Row) -> BoletinRow:
@@ -367,6 +414,10 @@ def boletines_mark_extracted(
     bulletin_number: Optional[int],
     period: Optional[str],
     needs_hermes_review: bool,
+    entries_matcheables: int = 0,
+    entries_hermes_pending: int = 0,
+    entries_figura: int = 0,
+    entries_lema: int = 0,
 ) -> None:
     conn.execute(
         "UPDATE boletines SET"
@@ -376,6 +427,10 @@ def boletines_mark_extracted(
         " bulletin_number = ?,"
         " period = ?,"
         " needs_hermes_review = ?,"
+        " entries_matcheables = ?,"
+        " entries_hermes_pending = ?,"
+        " entries_figura = ?,"
+        " entries_lema = ?,"
         " processed_at = datetime('now')"
         " WHERE id = ?",
         (
@@ -384,6 +439,10 @@ def boletines_mark_extracted(
             bulletin_number,
             period,
             1 if needs_hermes_review else 0,
+            entries_matcheables,
+            entries_hermes_pending,
+            entries_figura,
+            entries_lema,
             boletin_id,
         ),
     )
@@ -458,6 +517,11 @@ class DetectionRow:
     detected_at: str
     notified_email: int
     notified_at: Optional[str]
+    pais: Optional[str] = None
+    fecha_inscripcion: Optional[str] = None
+    fuente_parsing: Optional[str] = None
+    es_figura: int = 0
+    es_lema: int = 0
 
 
 def _detection_from_row(row: sqlite3.Row) -> DetectionRow:
@@ -481,13 +545,19 @@ def detections_add(
     class_nice: Optional[int] = None,
     page: Optional[int] = None,
     raw_excerpt: Optional[str] = None,
+    pais: Optional[str] = None,
+    fecha_inscripcion: Optional[str] = None,
+    fuente_parsing: Optional[str] = None,
+    es_figura: int = 0,
+    es_lema: int = 0,
 ) -> int:
     cur = conn.execute(
         "INSERT INTO detections("
         " boletin_id, user_id, watchlist_id, portfolio_id,"
         " expediente, mark_name, titular, class_nice, page,"
-        " similarity, match_kind, source, confidence, raw_excerpt)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " similarity, match_kind, source, confidence, raw_excerpt,"
+        " pais, fecha_inscripcion, fuente_parsing, es_figura, es_lema)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             boletin_id,
             user_id,
@@ -503,6 +573,11 @@ def detections_add(
             source,
             confidence,
             raw_excerpt,
+            pais,
+            fecha_inscripcion,
+            fuente_parsing,
+            es_figura,
+            es_lema,
         ),
     )
     return cur.lastrowid

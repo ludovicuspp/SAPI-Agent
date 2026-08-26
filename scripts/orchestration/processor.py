@@ -2,19 +2,19 @@
 
 Responsabilidades:
 - Calcular hash del PDF, crear fila en ``boletines``.
-- Extraer texto con pdfplumber (``scripts.extractors.pdf_text``).
+- Extraer texto con pdfplumber (``scripts.extractors.pdf_text``), con
+  fallback a pymupdf si detecta encoding cid: corrupto.
 - Auto-detectar metadatos del boletín (``parsers.boletin_header``).
-- Parsear entradas de marcas (``parsers.marca_entry``).
+- Parsear entradas de marcas con el parser multi-formato
+  (``parsers.marca_entry.MarcaEntryParser``).
+- Asignar estatus (PUBLICADA/CONCEDIDA/NEGADA/etc.) por sección detectada.
 - Marcar ``needs_hermes_review=1`` si hay páginas con imágenes o
   con texto poco confiable (la visión multimodal de Hermes las
   procesará en Fase 5).
 - Comparar entradas contra la watchlist y portafolio del usuario
-  con el motor de matching.
+  con el motor de matching (siempre Python, nunca LLM).
 - Persistir ``detections`` y ``scans_log``.
 - (Opcional) notificar por email las nuevas detections.
-
-Las decisiones de matching las toma SIEMPRE el motor Python
-(``scripts.matcher.combined``). Nunca se delega a un LLM.
 """
 from __future__ import annotations
 
@@ -43,7 +43,8 @@ from scripts.db import (
 from scripts.extractors import pdf_meta, pdf_text
 from scripts.matcher import combined
 from scripts.notifiers import email_smtp
-from scripts.parsers import boletin_header, marca_entry
+from scripts.parsers import boletin_header
+from scripts.parsers.marca_entry import MarcaEntryParser, MarcaEntry, ParseStats
 
 
 # ── Resultado del pipeline ─────────────────────────────────────
@@ -55,10 +56,15 @@ class ProcessResult:
     filename: str
     bulletin_number: Optional[int]
     period: Optional[str]
+    tomo: Optional[str]
     needs_hermes_review: bool
     pages_extracted: int
     pages_total: int
     entries_parsed: int
+    entries_matcheables: int
+    entries_figura: int
+    entries_lema: int
+    entries_hermes_pending: int
     detections_created: int
     emailed: int
     email_failed: int
@@ -69,7 +75,7 @@ class ProcessResult:
 
 
 def _build_parser_text(pages: list) -> str:
-    """Une el texto de cada página con un marcador que ``marca_entry``
+    """Une el texto de cada página con un marcador que ``MarcaEntryParser``
     usa para atribuir ``page`` a cada entrada detectada.
     """
     parts = []
@@ -120,7 +126,24 @@ def process_pdf(
 
         parser_text = _build_parser_text(extraction.pages)
         metadata = boletin_header.detect(parser_text)
-        entries = marca_entry.parse(parser_text)
+
+        # Parser multi-formato con lookup de página por posición.
+        import re as _re
+
+        def page_lookup(text: str, position: int) -> Optional[int]:
+            page_re = _re.compile(r"--- página (\d+) ---")
+            last = None
+            for m in page_re.finditer(text[: max(0, position)]):
+                last = int(m.group(1))
+            return last
+
+        def section_lookup(text: str, position: int) -> Optional[str]:
+            return boletin_header.detect_current_section(text, position)
+
+        parser = MarcaEntryParser(
+            page_lookup=page_lookup, section_lookup=section_lookup,
+        )
+        entries, stats = parser.parse_with_stats(parser_text)
 
         needs_hermes = any(
             p.has_images or p.low_confidence for p in extraction.pages
@@ -142,6 +165,13 @@ def process_pdf(
                 "period": metadata.period,
                 "tomo": metadata.tomo,
             },
+            "parse_stats": {
+                "total": stats.total_inscripciones,
+                "matcheables": stats.entries_matcheables,
+                "figura": stats.entries_figura,
+                "lema": stats.entries_lema,
+                "hermes_pending": stats.entries_hermes_pending,
+            },
         }
 
         boletines_mark_extracted(
@@ -152,54 +182,66 @@ def process_pdf(
             bulletin_number=metadata.bulletin_number,
             period=metadata.period,
             needs_hermes_review=needs_hermes,
+            entries_matcheables=stats.entries_matcheables,
+            entries_hermes_pending=stats.entries_hermes_pending,
+            entries_figura=stats.entries_figura,
+            entries_lema=stats.entries_lema,
         )
 
         # ── Match contra watchlist ───────────────────────────
         watch = watchlist_list_for_user(conn, user_id, only_active=True)
         watch_names = [w.name for w in watch]
-        candidate_names = [e.marca for e in entries if e.marca]
+
+        # Solo entries matcheables participan en el matching.
+        matcheable_entries = [e for e in entries if e.matcheable]
+        candidate_names = [e.marca for e in matcheable_entries if e.marca]
         thresholds = combined.Thresholds.from_settings(
             cfg.match_threshold, cfg.fuzzy_threshold
         )
 
         detections_created = 0
 
-        # Matching con watchlist: marca detectada en boletín vs watchlist
-        match_pairs = combined.find_matches(
-            watch_names, candidate_names, thresholds
-        )
-        # Indexa entradas por nombre para enriquecer expediente/titular/etc.
-        entries_by_name: dict[str, marca_entry.MarcaEntry] = {}
-        for e in entries:
+        # Indexar entries por nombre para enriquecer expediente/titular/etc.
+        entries_by_name: dict[str, MarcaEntry] = {}
+        for e in matcheable_entries:
             if e.marca and e.marca not in entries_by_name:
                 entries_by_name[e.marca] = e
 
         watch_by_name = {w.name: w for w in watch}
 
-        for watch_name, candidate, mr in match_pairs:
-            entry = entries_by_name.get(candidate)
-            if not entry:
-                continue
-            w = watch_by_name.get(watch_name)
-            if not w:
-                continue
-            detections_add(
-                conn,
-                boletin_id=boletin_id,
-                user_id=user_id,
-                watchlist_id=w.id,
-                mark_name=candidate,
-                similarity=mr.similarity,
-                match_kind="similar",
-                source="pdfplumber_text",
-                confidence=mr.confidence,
-                expediente=entry.expediente,
-                titular=entry.titular,
-                class_nice=entry.clase_niza,
-                page=entry.page,
-                raw_excerpt=entry.excerpt,
+        if watch_names and candidate_names:
+            match_pairs = combined.find_matches(
+                watch_names, candidate_names, thresholds
             )
-            detections_created += 1
+            for watch_name, candidate, mr in match_pairs:
+                entry = entries_by_name.get(candidate)
+                if not entry:
+                    continue
+                w = watch_by_name.get(watch_name)
+                if not w:
+                    continue
+                detections_add(
+                    conn,
+                    boletin_id=boletin_id,
+                    user_id=user_id,
+                    watchlist_id=w.id,
+                    mark_name=candidate,
+                    similarity=mr.similarity,
+                    match_kind="similar",
+                    source="pdfplumber_text",
+                    confidence=mr.confidence,
+                    expediente=entry.expediente,
+                    titular=entry.titular,
+                    class_nice=entry.clase_niza,
+                    page=entry.page,
+                    raw_excerpt=entry.excerpt,
+                    pais=entry.pais,
+                    fecha_inscripcion=entry.fecha_inscripcion,
+                    fuente_parsing=entry.fuente_parsing,
+                    es_figura=1 if entry.es_figura else 0,
+                    es_lema=1 if entry.es_lema else 0,
+                )
+                detections_created += 1
 
         # ── Match contra portafolio propio (status update) ────
         portfolio = portfolio_list_for_user(conn, user_id)
@@ -223,6 +265,11 @@ def process_pdf(
                         class_nice=entry.clase_niza,
                         page=entry.page,
                         raw_excerpt=entry.excerpt,
+                        pais=entry.pais,
+                        fecha_inscripcion=entry.fecha_inscripcion,
+                        fuente_parsing=entry.fuente_parsing,
+                        es_figura=1 if entry.es_figura else 0,
+                        es_lema=1 if entry.es_lema else 0,
                     )
                     detections_created += 1
                     if entry.estatus:
@@ -239,7 +286,6 @@ def process_pdf(
             ).fetchone()
             if user_row:
                 pending = detections_pending_notification(conn, user_id)
-                # Solo las creadas en este boletín, para no re-notificar lo viejo.
                 pending_this_run = [d for d in pending if d.boletin_id == boletin_id]
                 if pending_this_run:
                     boletin = boletines_get(conn, boletin_id)
@@ -261,7 +307,13 @@ def process_pdf(
             status="ok",
             user_id=user_id,
             boletin_id=boletin_id,
-            summary=f"{len(entries)} entries, {detections_created} detections",
+            summary=(
+                f"{stats.total_inscripciones} entries "
+                f"({stats.entries_matcheables} matcheables, "
+                f"{stats.entries_figura} figura, "
+                f"{stats.entries_lema} lema), "
+                f"{detections_created} detections"
+            ),
             duration_ms=duration_ms,
         )
 
@@ -270,10 +322,15 @@ def process_pdf(
             filename=filename,
             bulletin_number=metadata.bulletin_number,
             period=metadata.period,
+            tomo=metadata.tomo,
             needs_hermes_review=needs_hermes,
             pages_extracted=len(extraction.pages),
             pages_total=pages_total,
-            entries_parsed=len(entries),
+            entries_parsed=stats.total_inscripciones,
+            entries_matcheables=stats.entries_matcheables,
+            entries_figura=stats.entries_figura,
+            entries_lema=stats.entries_lema,
+            entries_hermes_pending=stats.entries_hermes_pending,
             detections_created=detections_created,
             emailed=emailed,
             email_failed=email_failed,

@@ -10,6 +10,40 @@ import re
 from dataclasses import dataclass, field
 
 
+# ── Catálogo de secciones observadas en BPI 651-655 ─────────────
+
+
+SECCIONES: dict[str, str | None] = {
+    # Marcas
+    "MARCAS CON ORDEN DE PUBLICACIÓN EN PRENSA": "PUBLICADA",
+    "MARCAS CON ORDEN DE PUBLICACIÓN": "PUBLICADA",
+    "MARCAS DE PRODUCTOS CONCEDIDAS": "CONCEDIDA",
+    "MARCAS DE SERVICIOS CONCEDIDAS": "CONCEDIDA",
+    "MARCAS NEGADAS": "NEGADA",
+    "MARCAS CADUCAS POR NO PAGO DE DERECHO": "CADUCA",
+    "MARCAS CADUCAS POR NO PAGO": "CADUCA",
+    "MARCAS DESISTIDAS": "DESISTIDA",
+    "RENOVACIONES DE MARCAS Y OTROS": "RENOVADA",
+    "RENOVACIONES DE MARCAS": "RENOVADA",
+    "SOLICITUDES DE MARCAS DE PRODUCTOS DEVUELTAS": "DEVUELTA",
+    "SOLICITUDES DE MARCAS DE SERVICIOS DEVUELTAS": "DEVUELTA",
+    "OPOSICIONES": "OPOSICION",
+    # Nombres comerciales
+    "NOMBRES COMERCIALES CONCEDIDAS": "CONCEDIDA",
+    "NOMBRES COMERCIALES": "CONCEDIDA",
+    # Lemas comerciales
+    "LEMAS COMERCIALES CONCEDIDOS": "CONCEDIDA",
+    "LEMAS COMERCIALES CONCEDIDAS": "CONCEDIDA",
+    # Administrativas (no son marcas en sí)
+    "DISPOSICIONES ADMINISTRATIVAS": None,
+    "CESIONES DE MARCAS Y OTROS SIGNOS DISTINTIVOS": "CESION",
+    "FUSIONES DE MARCAS Y OTROS SIGNOS DISTINTIVOS": "FUSION",
+    "LICENCIAS DE USO DE MARCA": "LICENCIA",
+    "CAMBIO DE NOMBRE DE MARCAS Y OTROS SIGNOS DISTINTIVOS": "CAMBIO_NOMBRE",
+    "CAMBIO DE DOMICILIO DE MARCAS Y OTROS SIGNOS DISTINTIVOS": "CAMBIO_DOMICILIO",
+}
+
+
 @dataclass
 class BoletinMetadata:
     bulletin_number: int | None = None
@@ -29,7 +63,7 @@ _PERIOD_RE = re.compile(
 )
 
 _TOMO_RE = re.compile(
-    r"[Tt]omo[s]?\s*[:.]?\s*([IVXLCDM]+(?:[/-][IVXLCDM]+)?)",
+    r"[Tt]omos?\s*[:.]?\s*([IVXLCDM]+(?:[/-][IVXLCDM]+)?)",
     re.IGNORECASE,
 )
 
@@ -68,3 +102,29 @@ def detect(text: str) -> BoletinMetadata:
         md.raw_matches["tomo"] = m.group(0)
 
     return md
+
+
+# ── Detección inline de sección actual ────────────────────────
+
+
+# Pre-compilamos las regex de las secciones (case-insensitive, palabra completa).
+_SECCION_PATTERNS = [
+    (re.compile(re.escape(kw), re.IGNORECASE), estatus)
+    for kw, estatus in SECCIONES.items()
+]
+
+
+def detect_current_section(text: str, position: int) -> str | None:
+    """Devuelve el estatus de la última sección detectada antes de ``position``.
+
+    Si no hay sección reconocible, devuelve ``None``.
+    """
+    best_pos = -1
+    best_estatus: str | None = None
+    head = text[: max(0, position)]
+    for pat, estatus in _SECCION_PATTERNS:
+        for m in pat.finditer(head):
+            if m.start() > best_pos:
+                best_pos = m.start()
+                best_estatus = estatus
+    return best_estatus
