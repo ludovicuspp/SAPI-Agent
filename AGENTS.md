@@ -17,16 +17,17 @@ objetivos en [`docs/objetivos.md`](docs/objetivos.md).
 
 ## Estado actual del repo
 
-El repo se construye por fases. Lo que **sí existe hoy** (Fase 2):
+El repo se construye por fases. Lo que **sí existe hoy** (Fase 3):
 
 - `scripts/` — capa Python: extractores, parsers, matcher, db, CLI.
+- `api/` — FastAPI REST API con auth JWT, CRUD multi-tenant,
+  uploads + background tasks, WebSocket, structured (Hermes).
 - `tests/` — pytest con fixtures (`tests/fixtures/sample_boletin.pdf`,
-  `tests/conftest.py::tmp_db`).
+  `tests/conftest.py::tmp_db`). 140 tests.
 - `hermes/SOUL.md` — solo manifiesto (sin skills todavía).
 
 Lo que **aún no existe** (no inventes estructura):
 
-- `api/` está **vacío** (Fase 3).
 - `dashboard/` no existe (Fase 4).
 - `hermes/skills/` está vacío (Fase 5).
 - No hay `pyproject.toml`, ni config de `ruff`/`mypy`/`black`, ni
@@ -60,6 +61,7 @@ cp .env.example .env                     # editar JWT_SECRET y credenciales
 | Procesar PDF | `python -m scripts.cli process-boletin PATH --user-email ... [--notify]` | pipeline end-to-end |
 | Listar detecciones | `python -m scripts.cli list-detections --user-email ...` | |
 | Digest por email | `python -m scripts.cli send-digest --user-email ...` | requiere SMTP configurado |
+| Arrancar API | `uvicorn api.main:app --reload --port 8000` | Swagger: `http://localhost:8000/docs` |
 | Tests | `pytest tests/` | o un archivo: `pytest tests/test_matchers.py` |
 
 Si SMTP no está configurado, `send-digest` imprime el HTML en pantalla

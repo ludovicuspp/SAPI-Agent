@@ -171,3 +171,33 @@ class StructuredBoletinIn(BaseModel):
 
     boletin_id: int
     entries: list[StructuredEntryIn] = Field(min_length=1)
+
+
+# ── /api/summary ────────────────────────────────────────────────
+
+
+class SummaryOut(BaseModel):
+    watchlist_count: int
+    portfolio_count: int
+    boletines_count: int
+    detections_count: int
+    last_boletin_at: Optional[datetime]
+    recent_detections: list[DetectionOut]
+    recent_boletines: list[BoletinOut]
+
+
+# ── /api/boletines/upload ───────────────────────────────────────
+
+
+class UploadOut(BaseModel):
+    boletin_id: int
+    status: str
+
+
+# ── /api/boletines/{id}/structured (response) ──────────────────
+
+
+class StructuredOut(BaseModel):
+    boletin_id: int
+    status: str
+    entries_added: int

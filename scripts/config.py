@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
 
     hermes_api_url: str = "http://localhost:8000"
+    service_token_hermes: str = ""
 
     admin_email: str = ""
     admin_password: str = ""
