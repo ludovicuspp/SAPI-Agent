@@ -31,9 +31,41 @@ El repo se construye por fases. Lo que **sí existe hoy** (Fase 4):
 
 Lo que **aún no existe** (no inventes estructura):
 
-- `hermes/skills/` está vacío (Fase 5).
+- Otros skills de Hermes más allá de `sapi-monitor`.
 - No hay `pyproject.toml`, ni config de `ruff`/`mypy`/`black`, ni
   pre-commit, ni CI. Si necesitas uno, pregunta antes de añadir.
+
+## Fase 5 — Skill Hermes `sapi-monitor`
+
+Orquesta la revisión visual de boletines con `needs_hermes_review=1`
+(páginas con imágenes o encoding roto). Vive en
+`hermes/skills/sapi-monitor/`:
+
+| Archivo | Función |
+|---|---|
+| `SKILL.md` | Frontmatter Hermes + flujo operacional (decide visión vs texto) |
+| `watchdog.sh` | Monitor estable para el cron (no imprime timestamps) |
+| `scripts/pending_boletines.py` | Lista pendientes (CLI, usable como watchdog) |
+| `scripts/db_utils.py` | Lectura read-only de `data/sapi.db` |
+| `scripts/extract_page.py` | Texto de una página o render a PNG |
+| `scripts/submit.py` | POST entries a `/api/boletines/{id}/structured` |
+| `tests/` | 22 tests pytest |
+
+**Ejecución como archivo** (no como paquete; el directorio lleva
+guion y no es importable):
+
+```bash
+python hermes/skills/sapi-monitor/scripts/pending_boletines.py [--db data/sapi.db]
+python hermes/skills/sapi-monitor/scripts/extract_page.py --pdf X.pdf --page N [--render DIR]
+python hermes/skills/sapi-monitor/scripts/submit.py --boletin-id 1 --entries e.json
+```
+
+`submit.py` usa la stdlib (`urllib`) por defecto → **no añade
+dependencias** y no falla por falta de `httpx`.
+
+**Regla clave**: la skill solo **lee** la BD y **no calcula
+similitudes**. El endpoint `structured.py` hace matching en Python y
+marca `hermes_processed_at` (defensa contra duplicados).
 
 ## Setup
 
