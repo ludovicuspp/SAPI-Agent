@@ -133,20 +133,37 @@ Para que Hermes corra solo cuando hay trabajo nuevo, usa el cron con
 `--monitor-script`:
 
 ```bash
-# 1. Exponer el watchdog del repo a Hermes (enlace simbólico):
-ln -sf "$PWD/hermes/skills/sapi-monitor/watchdog.sh" ~/.hermes/scripts/sapi_pending.sh
+# 1. Exponer el watchdog a Hermes.
+#    IMPORTANTE: Hermes RECHAZA symlinks que escapen de ~/.hermes/scripts/
+#    (validación de seguridad que resuelve link seguidos y exige que la
+#    ruta quede dentro). Usa una COPIA ESTÁTICA; re-copiar tras cada pull
+#    del watchdog en el repo.
+cp "$PWD/hermes/skills/sapi-monitor/watchdog.sh" ~/.hermes/scripts/sapi_pending.sh
+chmod +x ~/.hermes/scripts/sapi_pending.sh
 
-# 2. Registrar el job (corre cada 30m, solo dispara al agente si cambió):
-hermes cron create '30m' --name sapi-monitor \
+# 2. Registrar el job recurrente. 'every 30m' = interval recurrente infinito
+#    (Repeat=∞). Un '30m' sin "every" sería un disparo único (repeat=1).
+hermes cron create 'every 30m' --name sapi-monitor \
   --monitor-script sapi_pending.sh \
   --skill sapi-monitor \
   --workdir /ruta/al/repo \
+  --deliver local \
   "Procesa los boletines SAPI pendientes de revisión visual."
+
+# 3. El scheduler lo maneja el gateway de Hermes. Para ejecución automática
+#    persistente en un servidor (Ubuntu/systemd):
+hermes gateway install          # servicio de usuario (sin sudo)
+hermes cron status              # debe decir "cron jobs will fire automatically"
 ```
 
-> Nota: el watchdog (`watchdog.sh`) es estable — no imprime timestamps
+> Nota 1: `--deliver local` entrega el resultado en la salida local.
+> No configures `telegram:...`/`discord:...` hasta que esa plataforma
+> esté habilitada en `hermes status`; de lo contrario el delivery fallará.
+
+> Nota 2: el watchdog (`watchdog.sh`) es estable — no imprime timestamps
 > ni recuentos totales variables — para que el `--monitor-script` solo
-> dispare cuando haya trabajo nuevo y no gaste tokens cada tick.
+> dispare cuando haya trabajo nuevo y no gaste tokens cada tick. Al
+> copiarlo estáticamente, re-cópialo si lo editas en el repo.
 
 El `--monitor-script` devuelve la lista de pendientes; si no cambió
 respecto a la última vez, Hermes no corre (ahorra tokens). Cuando

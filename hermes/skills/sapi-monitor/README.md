@@ -53,20 +53,24 @@ pytest hermes/skills/sapi-monitor/tests -v
 ## Cron (watchdog)
 
 Ver la sección "Monitoreo periódico con cron" en `SKILL.md`. El patrón
-recomendado es:
+recomendado es una **copia estática** del watchdog (Hermes rechaza
+symlinks que escapen de `~/.hermes/scripts/`) y un job **recurrente**:
 
 ```bash
-ln -sf "$PWD/hermes/skills/sapi-monitor/watchdog.sh" ~/.hermes/scripts/sapi_pending.sh
-hermes cron create '30m' --name sapi-monitor \
+cp "$PWD/hermes/skills/sapi-monitor/watchdog.sh" ~/.hermes/scripts/sapi_pending.sh
+chmod +x ~/.hermes/scripts/sapi_pending.sh
+hermes cron create 'every 30m' --name sapi-monitor \
   --monitor-script sapi_pending.sh \
   --skill sapi-monitor \
   --workdir /ruta/al/repo \
+  --deliver local \
   "Procesa los boletines SAPI pendientes de revisión visual."
 ```
 
-El `watchdog.sh` del repo es estable (sin timestamps), de modo que el
-`--monitor-script` solo dispara al agente cuando cambia la lista de
-pendientes.
+`'every 30m'` (con "every") = recurrente infinito; `'30m'` solo = un
+disparo único. El `--monitor-script` solo dispara al agente cuando
+cambia el output del watchdog, así que ahorra tokens. La ejecución
+automática corre bajo el gateway de Hermes (`hermes gateway install`).
 
 ## Convenciones
 
