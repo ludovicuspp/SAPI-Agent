@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Python tests (backend + Hermes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+
+      - name: Install runtime + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Pytest (backend)
+        run: pytest tests/ -v --tb=short
+
+      - name: Pytest (Hermes skill)
+        run: pytest hermes/skills/sapi-monitor/tests/ -v --tb=short
+
+  dashboard:
+    name: Dashboard tests + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Type-check + Build
+        working-directory: dashboard
+        run: npm run build
+
+      - name: Vitest
+        working-directory: dashboard
+        run: npm test
+
+      - name: Upload dist artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: dashboard/dist
+          if-no-files-found: error
+
+  gate:
+    name: CI verde
+    needs: [backend, dashboard]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CI passed (backend + dashboard + build)"

@@ -1,0 +1,55 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to VM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          command_timeout: 5m
+          script: |
+            set -e
+            cd /home/luisv/SAPI-Agent
+
+            # 1) Traer la verdad: el commit desplegado (FF-only, sin merges silenciosos)
+            git pull --ff-only
+
+            # 2) Dependencias backend (rapid si no cambiaron requirements.txt)
+            python -m pip install -r requirements.txt
+
+            # 3) Reconstruir dashboard con .env.production del repo (fix anti-doble-/api)
+            cd dashboard
+            npm ci --omit=dev
+            npm run build
+
+            # 4) Volver a la raíz
+            cd /home/luisv/SAPI-Agent
+
+            # 5) Reiniciar el servicio gestionado por systemd
+            sudo -n systemctl restart sapi-api.service
+            sleep 2
+            sudo -n systemctl is-active sapi-api.service
+
+            # 6) Health-check interno (rápido, dentro de la VM)
+            curl -sf http://127.0.0.1:8000/api/health
+
+      - name: Smoke-test (cara pública)
+        run: |
+          curl -sf https://marcas.solutechve.net/api/health
+          curl -sf -o /dev/null -w "dashboard=%{http_code}\n" https://marcas.solutechve.net/
