@@ -95,10 +95,30 @@ cp .env.example .env                     # editar JWT_SECRET y credenciales
 | Procesar PDF | `python -m scripts.cli process-boletin PATH --user-email ... [--notify]` | pipeline end-to-end |
 | Listar detecciones | `python -m scripts.cli list-detections --user-email ...` | |
 | Digest por email | `python -m scripts.cli send-digest --user-email ...` | requiere SMTP configurado |
-| Arrancar API | `uvicorn api.main:app --reload --port 8000` | Swagger: `http://localhost:8000/docs` |
-| Arrancar Dashboard | `cd dashboard && npm run dev` | `http://localhost:5173` |
+| Arrancar API | `uvicorn api.main:app --reload --port 8000` | dev; Swagger: `http://localhost:8000/docs` |
+| Build Dashboard | `cd dashboard && npm run build` | genera `dashboard/dist/`; la API lo sirve en prod (SPA) |
+| Arrancar Dashboard (dev) | `cd dashboard && npm run dev` | Vite en `:5173`; proxy `/api` y `/ws` → `:8000` |
+| Arrancar API (prod) | `uvicorn api.main:app --host 127.0.0.1 --port 8000` | sirve `dist/` si existe; detrás de reverse proxy |
 | Tests API | `pytest tests/` | o un archivo: `pytest tests/test_api.py` |
 | Tests Dashboard | `cd dashboard && npm test` | o watch: `cd dashboard && npm run test:watch` |
+
+## Publicación del dashboard
+
+- El dashboard se compila a estático y FastAPI lo sirve en el mismo
+  proceso. **Sin nginx/caddy local**: la SPA la sirve `api/main.py`
+  (`_mount_dashboard`), montando `/assets` como estático y devolviendo
+  `index.html` como fallback SPA para toda ruta que no empiece por
+  `api/`, `docs`, `openapi.json` o `redoc`.
+- En **producción** el dashboard usa URLs relativas para hablar con la
+  API y el WebSocket (`/api` y `/ws`, mismo origen). Se definen en
+  `dashboard/.env.production` y se inyectan al build con
+  `VITE_API_BASE_URL=/api` / `VITE_WS_BASE_URL=/ws`. El CORS solo
+  necesita el dominio público (`API_CORS_ORIGINS` en `.env` raíz).
+- En **desarrollo** `dashboard/.env` apunta a `http://localhost:8000` /
+  `ws://localhost:8000` y Vite proxifica `/api` y `/ws` a FastAPI.
+- Pasos para desplegar: `cd dashboard && npm run build` y reiniciar la
+  API (`uvicorn api.main:app --host 127.0.0.1 --port 8000`). Si `dist/`
+  no existe, la SPA devuelve 503 con mensaje claro; la API sigue viva.
 
 Si SMTP no está configurado, `send-digest` imprime el HTML en pantalla
 en vez de enviarlo (`scripts/cli.py:297-301`).

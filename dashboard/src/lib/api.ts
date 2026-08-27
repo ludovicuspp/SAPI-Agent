@@ -53,5 +53,10 @@ export async function request<T>(
 }
 
 export function wsBase(): string {
-  return import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000";
+  const configured = import.meta.env.VITE_WS_BASE_URL;
+  if (configured) return configured;
+  // Mismo origen (producción): resuelve el protocolo/host actual de la
+  // página (wss: si es https, ws: si es http) para evitar fijar dominio.
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}`;
 }

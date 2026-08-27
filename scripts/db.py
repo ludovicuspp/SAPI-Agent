@@ -132,8 +132,13 @@ CREATE INDEX IF NOT EXISTS idx_scans_log_created ON scans_log(created_at);
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
-    """Abre una conexión SQLite con FK activadas y row_factory."""
-    conn = sqlite3.connect(str(db_path))
+    """Abre una conexión SQLite con FK activadas y row_factory.
+
+    `check_same_thread=False`: cada request abre su propia conexión
+    aislada (ver `get_db`), que se descarta al terminar; con WAL activo
+    no hay estado compartido entre hilos, así que es seguro.
+    """
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
