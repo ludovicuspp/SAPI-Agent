@@ -1,0 +1,13 @@
+[Unit]
+Description=SAPI-Agent pull deploy (timer)
+Requires=sapi-pull.service
+
+[Timer]
+# Primer trigger 1 minuto tras boot; luego cada 5 min
+OnBootSec=1min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=sapi-pull.service
+
+[Install]
+WantedBy=timers.target

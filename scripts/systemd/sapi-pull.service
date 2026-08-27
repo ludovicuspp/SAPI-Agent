@@ -1,0 +1,11 @@
+[Unit]
+Description=SAPI-Agent pull deploy (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=luisv
+WorkingDirectory=/home/luisv/SAPI-Agent
+ExecStart=/home/luisv/SAPI-Agent/scripts/pull_deploy.sh
+Nice=10
