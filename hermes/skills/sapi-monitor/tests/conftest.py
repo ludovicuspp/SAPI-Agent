@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
 
-from scripts import db
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+
+from scripts import db  # noqa: E402
 
 
 @pytest.fixture()
