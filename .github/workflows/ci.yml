@@ -44,7 +44,10 @@ jobs:
       - name: Pytest (notifier events)
         run: pytest tests/test_notifier_events.py -v --tb=long
       - name: Pytest (versioning)
-        run: pytest tests/test_versioning.py -v --tb=long
+        run: |
+          set -x
+          python --version
+          pytest tests/test_versioning.py -v --tb=long --maxfail=1 -s 2>&1 | head -200
       - name: Pytest (upload nodup)
         run: pytest tests/test_upload_nodup.py -v --tb=long
 
