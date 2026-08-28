@@ -39,8 +39,14 @@ jobs:
         run: pytest tests/test_orquestador.py -v --tb=long
       - name: Pytest (e2e pipeline)
         run: pytest tests/test_pipeline_e2e.py -v --tb=long
-      - name: Pytest (metrics + notifier + versioning + upload)
-        run: pytest tests/test_metrics.py tests/test_notifier_events.py tests/test_versioning.py tests/test_upload_nodup.py -v --tb=long
+      - name: Pytest (metrics)
+        run: pytest tests/test_metrics.py -v --tb=long
+      - name: Pytest (notifier events)
+        run: pytest tests/test_notifier_events.py -v --tb=long
+      - name: Pytest (versioning)
+        run: pytest tests/test_versioning.py -v --tb=long
+      - name: Pytest (upload nodup)
+        run: pytest tests/test_upload_nodup.py -v --tb=long
 
       - name: Pytest (Hermes skill)
         run: pytest hermes/skills/sapi-monitor/tests/ -v --tb=short
