@@ -13,6 +13,7 @@ from api.deps import get_db, require_hermes
 router = APIRouter()
 
 _MAX_ENTRIES_PER_REQUEST = 100
+_MAX_MATCHES_PER_ENTRY = 5
 
 
 @router.post("/{boletin_id}/structured", response_model=StructuredOut)
@@ -41,35 +42,42 @@ async def submit_structured(
 
     for entry in payload.entries:
         # Buscar matches contra TODAS las watchlists activas (multi-tenant).
+        # Cap top-N por similitud para evitar explosión (entradas alucinadas
+        # con muchas watchlists no deben generar miles de detections).
+        watch_candidates: list[tuple] = []
         for user in db.users_list(conn):
             user_watch = db.watchlist_list_for_user(conn, user.id, only_active=True)
             for w in user_watch:
                 mr = combined.score_pair(w.name, entry.marca, thresholds)
                 if mr.is_match:
-                    db.detections_add(
-                        conn,
-                        boletin_id=boletin_id,
-                        user_id=user.id,
-                        watchlist_id=w.id,
-                        mark_name=entry.marca,
-                        similarity=mr.similarity,
-                        match_kind="similar",
-                        source=entry.fuente,
-                        confidence=entry.confianza,
-                        expediente=entry.expediente,
-                        titular=entry.titular,
-                        class_nice=entry.clase_niza,
-                        page=entry.pagina,
-                        raw_excerpt=entry.excerpt,
-                        pais=entry.pais,
-                        fecha_inscripcion=(
-                            entry.fecha_inscripcion.isoformat()
-                            if hasattr(entry.fecha_inscripcion, "isoformat")
-                            else entry.fecha_inscripcion
-                        ),
-                        fuente_parsing="hermes",
-                    )
-                    entries_added += 1
+                    watch_candidates.append((mr.similarity, user.id, w, mr))
+
+        watch_candidates.sort(key=lambda t: t[0], reverse=True)
+        for _sim, user_id, w, mr in watch_candidates[:_MAX_MATCHES_PER_ENTRY]:
+            db.detections_add(
+                conn,
+                boletin_id=boletin_id,
+                user_id=user_id,
+                watchlist_id=w.id,
+                mark_name=entry.marca,
+                similarity=mr.similarity,
+                match_kind="similar",
+                source=entry.fuente,
+                confidence=entry.confianza,
+                expediente=entry.expediente,
+                titular=entry.titular,
+                class_nice=entry.clase_niza,
+                page=entry.pagina,
+                raw_excerpt=entry.excerpt,
+                pais=entry.pais,
+                fecha_inscripcion=(
+                    entry.fecha_inscripcion.isoformat()
+                    if hasattr(entry.fecha_inscripcion, "isoformat")
+                    else entry.fecha_inscripcion
+                ),
+                fuente_parsing="hermes",
+            )
+            entries_added += 1
 
         # Match contra portafolios propios por expediente.
         for user in db.users_list(conn):

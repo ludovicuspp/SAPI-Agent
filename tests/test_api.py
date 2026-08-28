@@ -286,7 +286,7 @@ def test_upload_empty_file(client: TestClient, agent_token: str):
 
 
 def test_upload_too_large(client: TestClient, agent_token: str):
-    big = io.BytesIO(b"%" * (60 * 1024 * 1024))
+    big = io.BytesIO(b"%" * (301 * 1024 * 1024))
     r = client.post(
         "/api/boletines/upload",
         files={"file": ("big.pdf", big, "application/pdf")},

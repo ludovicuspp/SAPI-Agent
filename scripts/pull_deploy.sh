@@ -12,10 +12,10 @@
 set -euo pipefail
 
 REPO_DIR="/home/luisv/SAPI-Agent"
-LOG_FILE="/home/luisv/data/sapi-pull.log"
+LOG_FILE="/var/log/sapi-pull.log"
 LOCK_FILE="/home/luisv/data/sapi-pull.lock"
 
-mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$LOCK_FILE")"
 exec >> "$LOG_FILE" 2>&1
 
 echo "=========================================="

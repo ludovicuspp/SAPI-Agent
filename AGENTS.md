@@ -26,14 +26,19 @@ El repo se construye por fases. Lo que **sí existe hoy** (hasta Fase 5):
   login, summary, boletines, detecciones, watchlist, portfolio,
   users. 32 tests Vitest.
 - `tests/` — pytest con fixtures (`tests/fixtures/sample_boletin.pdf`,
-  `tests/conftest.py::tmp_db`). 140 tests.
+  `tests/conftest.py::tmp_db`). **186 tests** (140 backend + 22 Hermes +
+  11 matcher calidad + 22 alucinaciones + 7 orquestador + 5 pipeline E2E
+  con boletín real BPI 654 + 32 dashboard Vitest).
 - `hermes/` — manifiesto `SOUL.md` + skill `sapi-monitor` (Fase 5).
 
 Lo que **aún no existe** (no inventes estructura):
 
 - Otros skills de Hermes más allá de `sapi-monitor`.
 - No hay `pyproject.toml`, ni config de `ruff`/`mypy`/`black`, ni
-  pre-commit, ni CI. Si necesitas uno, pregunta antes de añadir.
+  pre-commit. Si necesitas uno, pregunta antes de añadir.
+- CI: existe `.github/workflows/ci.yml` (jobs `backend` +
+  `dashboard` + `gate`), pero está **untracked** en el repo. No lo
+  asumas en PRs sin antes verificar si se quiere commitear.
 
 ## Fase 5 — Skill Hermes `sapi-monitor`
 
@@ -97,6 +102,33 @@ cp .env.example .env                     # editar JWT_SECRET y credenciales
   `ADMIN_PASSWORD` están definidos en `.env` y no hay admins
   (`scripts/cli.py:82-108`).
 
+## Cleanup de Secrets SSH_* (legado)
+
+Cuando se diseñó el CD inicialmente era SSH-based. Por la imposibilidad de
+alcanzar esta VM por SSH público (el puerto 22 responde un servidor Debian
+del proveedor, no Ubuntu 26.04), el CD pasó a ser **pull-based** mediante
+`sapi-pull.timer` + `scripts/pull_deploy.sh`. Los secrets
+`SSH_HOST`, `SSH_USER`, `SSH_PORT`, `SSH_PRIVATE_KEY` ya **no se usan** y
+se recomienda eliminarlos del repo para hygiene:
+
+- **UI**: Settings → Secrets and variables → Actions → borrar cada uno.
+- **CLI** (si tienes `gh` autenticado):
+  ```bash
+  gh secret delete SSH_HOST --repo ludovicuspp/SAPI-Agent
+  gh secret delete SSH_USER --repo ludovicuspp/SAPI-Agent
+  gh secret delete SSH_PORT --repo ludovicuspp/SAPI-Agent
+  gh secret delete SSH_PRIVATE_KEY --repo ludovicuspp/SAPI-Agent
+  ```
+
+Si vuelves a un CD SSH-based en otra VM con IP pública alcanzable, **vuelve
+a crear el par**:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_sapi_cicd -N "" -C "sapi-agent-cicd-runner"
+cat ~/.ssh/id_ed25519_sapi_cicd.pub >> ~/.ssh/authorized_keys
+# subir la clave privada como secret SSH_PRIVATE_KEY en GitHub
+```
+
 ## Comandos
 
 | Capa | Comando | Notas |
@@ -106,6 +138,9 @@ cp .env.example .env                     # editar JWT_SECRET y credenciales
 | Procesar PDF | `python -m scripts.cli process-boletin PATH --user-email ... [--notify]` | pipeline end-to-end |
 | Listar detecciones | `python -m scripts.cli list-detections --user-email ...` | |
 | Digest por email | `python -m scripts.cli send-digest --user-email ...` | requiere SMTP configurado |
+| Pull deploy manual | `bash scripts/pull_deploy.sh` | mismo flujo que `sapi-pull.timer`; ver logs en `/var/log/sapi-pull.log` |
+| Estado pull timer | `systemctl --user status sapi-pull.timer` | user systemd, activa cada 5 min, `Linger=yes` |
+| Forzar rotación log | `sudo /usr/sbin/logrotate -f /etc/logrotate.conf` | rotación forzada (la automática corre diaria) |
 | Arrancar API | `uvicorn api.main:app --reload --port 8000` | dev; Swagger: `http://localhost:8000/docs` |
 | Build Dashboard | `cd dashboard && npm run build` | genera `dashboard/dist/`; la API lo sirve en prod (SPA) |
 | Arrancar Dashboard (dev) | `cd dashboard && npm run dev` | Vite en `:5173`; proxy `/api` y `/ws` → `:8000` |
@@ -114,6 +149,19 @@ cp .env.example .env                     # editar JWT_SECRET y credenciales
 | Tests Hermes | `pytest hermes/skills/sapi-monitor/tests` | 22 tests; requieren `data/sapi.db` en algunas fixtures |
 | Tests Dashboard | `cd dashboard && npm test` | o watch: `cd dashboard && npm run test:watch` |
 
+## CI (`.github/workflows/ci.yml`)
+
+Workflow con tres jobs en paralelo sobre push/PR a `main`:
+
+| Job | Qué ejecuta |
+|---|---|
+| `backend` | `pytest tests/ -v --tb=short` + `pytest hermes/skills/sapi-monitor/tests/ -v --tb=short` |
+| `dashboard` | `npm ci`, `npm run build` (que incluye `tsc -b`), `npm test`, sube `dashboard/dist` como artefacto |
+| `gate` | depende de los dos anteriores; imprime "CI passed" |
+
+Python 3.14, Node 22. El job `dashboard` falla si `dist/` no se
+genera (artefacto con `if-no-files-found: error`).
+
 ## Publicación del dashboard
 
 - El dashboard se compila a estático y FastAPI lo sirve en el mismo
@@ -121,12 +169,16 @@ cp .env.example .env                     # editar JWT_SECRET y credenciales
   (`_mount_dashboard`), montando `/assets` como estático y devolviendo
   `index.html` como fallback SPA para toda ruta que no empiece por
   `api/`, `docs`, `openapi.json` o `redoc`.
-- En **producción** `dashboard/.env.production` solo define
-  `VITE_API_BASE_URL=/api` (relativo, mismo origen). El WebSocket **no
-  necesita variable**: `wsBase()` (`dashboard/src/lib/api.ts`) resuelve
-  el protocolo/host actual de la página (`wss://…` si es https);
-  `VITE_WS_BASE_URL` es un override opcional. El CORS solo necesita el
-  dominio público (`API_CORS_ORIGINS` en `.env` raíz).
+- En **producción** `dashboard/.env.production` define
+  `VITE_API_BASE_URL=` (vacío, **no** `/api`). El código de la SPA
+  ya antepone `/api` a cada path (`request("/api/auth/login")`),
+  así que el base debe ser vacío para no duplicar el prefijo. La
+  constante en `dashboard/src/lib/api.ts:1` cae a `""` por
+  defecto. El WebSocket **no necesita variable**: `wsBase()`
+  (`dashboard/src/lib/api.ts:55-61`) resuelve el protocolo/host
+  actual de la página (`wss://…` si es https);
+  `VITE_WS_BASE_URL` es un override opcional. El CORS solo necesita
+  el dominio público (`API_CORS_ORIGINS` en `.env` raíz).
 - En **desarrollo** `dashboard/.env` define
   `VITE_API_BASE_URL=http://localhost:8000` y Vite proxifica `/api` y
   `/ws` a FastAPI (`dashboard/vite.config.ts`). El WebSocket va al

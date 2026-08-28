@@ -16,6 +16,19 @@ Source = Literal["pdfplumber_text", "hermes_llm", "hermes_vision"]
 Confidence = Literal["high", "medium", "low"]
 Role = Literal["admin", "agent"]
 
+EstatusLiteral = Literal[
+    "PUBLICADA",
+    "CONCEDIDA",
+    "NEGADA",
+    "DESISTIDA",
+    "OPOSICION",
+    "PRORROGADA",
+    "CADUCA",
+    "EN_TRAMITE",
+    "PRIMERA_PUBLICACION",
+    "SEGUNDA_PUBLICACION",
+]
+
 
 # ── auth / users ───────────────────────────────────────────────
 
@@ -154,16 +167,19 @@ class StructuredEntryIn(BaseModel):
     clase_niza: int = Field(ge=1, le=45)
     titular: str = Field(min_length=1, max_length=300)
     pais: Optional[str] = Field(default=None, max_length=100)
-    estatus: str = Field(min_length=1, max_length=80)
+    estatus: EstatusLiteral
     pagina: Optional[int] = Field(default=None, ge=1)
     fuente: Source = "hermes_vision"
     confianza: Confidence = "medium"
     excerpt: Optional[str] = None
+    fecha_inscripcion: Optional[str] = Field(default=None, max_length=20)
 
-    @field_validator("estatus")
+    @field_validator("estatus", mode="before")
     @classmethod
     def _normalize_estatus(cls, v: str) -> str:
-        return v.strip().upper()
+        if isinstance(v, str):
+            return v.strip().upper()
+        return v
 
 
 class StructuredBoletinIn(BaseModel):

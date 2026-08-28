@@ -113,6 +113,10 @@ CREATE TABLE IF NOT EXISTS detections (
 CREATE INDEX IF NOT EXISTS idx_detections_user ON detections(user_id);
 CREATE INDEX IF NOT EXISTS idx_detections_boletin ON detections(boletin_id);
 CREATE INDEX IF NOT EXISTS idx_detections_watchlist ON detections(watchlist_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_dedupe
+    ON detections(boletin_id, expediente, watchlist_id);
+CREATE INDEX IF NOT EXISTS idx_detections_boletin_exp
+    ON detections(boletin_id, expediente);
 
 CREATE TABLE IF NOT EXISTS scans_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -557,7 +561,7 @@ def detections_add(
     es_lema: int = 0,
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO detections("
+        "INSERT OR IGNORE INTO detections("
         " boletin_id, user_id, watchlist_id, portfolio_id,"
         " expediente, mark_name, titular, class_nice, page,"
         " similarity, match_kind, source, confidence, raw_excerpt,"

@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     smtp_from: str = "SAPI-Agent <noreply@sapi-agent.local>"
     notify_cooldown_hours: int = 24
 
-    max_upload_mb: int = 50
+    max_upload_mb: int = 300
 
     hermes_api_url: str = "http://localhost:8000"
     service_token_hermes: str = ""
