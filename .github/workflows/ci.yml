@@ -33,9 +33,14 @@ jobs:
       - name: Pytest (parsers + processor + matcher)
         run: |
           pytest tests/test_matchers.py tests/test_matcher_calidad.py tests/test_parsers.py tests/test_patterns.py tests/test_processor.py tests/test_schemas.py -v --tb=short
-      - name: Pytest (alucinaciones + orquestador + e2e + metrics + notifier + versioning + upload)
-        run: |
-          pytest tests/test_alucinaciones.py tests/test_orquestador.py tests/test_pipeline_e2e.py tests/test_metrics.py tests/test_notifier_events.py tests/test_versioning.py tests/test_upload_nodup.py -v --tb=short
+      - name: Pytest (alucinaciones)
+        run: pytest tests/test_alucinaciones.py -v --tb=long
+      - name: Pytest (orquestador)
+        run: pytest tests/test_orquestador.py -v --tb=long
+      - name: Pytest (e2e pipeline)
+        run: pytest tests/test_pipeline_e2e.py -v --tb=long
+      - name: Pytest (metrics + notifier + versioning + upload)
+        run: pytest tests/test_metrics.py tests/test_notifier_events.py tests/test_versioning.py tests/test_upload_nodup.py -v --tb=long
 
       - name: Pytest (Hermes skill)
         run: pytest hermes/skills/sapi-monitor/tests/ -v --tb=short
