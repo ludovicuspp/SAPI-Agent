@@ -18,8 +18,12 @@ from api.deps import get_db
 from scripts import auth, db
 
 
-@pytest.fixture(autouse=True)
-def _settings(tmp_path: Path, monkeypatch):
+# El test NO usa fixture autouse de test_api (que requiere TestClient y
+# compartir BD); usa su propio setup minimalista para aislar el bug.
+
+
+def test_upload_no_duplica_fila(tmp_path: Path, monkeypatch):
+    """Regression test del bug: upload NO debe duplicar filas en BD."""
     db_file = tmp_path / "test_upload_nodup.db"
     db.init_db(db_file)
     monkeypatch.setenv("SAPI_DB_PATH", str(db_file))
@@ -29,12 +33,7 @@ def _settings(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("SERVICE_TOKEN_HERMES", "")
     from scripts.config import get_settings
     get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
 
-
-def test_upload_no_duplica_fila(tmp_path: Path):
-    db_file = tmp_path / "test_upload_nodup.db"
     app = create_app()
 
     conn = db.connect(db_file)

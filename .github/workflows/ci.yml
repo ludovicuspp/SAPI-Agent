@@ -23,12 +23,18 @@ jobs:
 
       - name: Install runtime + dev deps
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Pytest (backend)
-        run: pytest tests/ -v --tb=short
+      - name: Pytest (backend) verbose
+        run: |
+          set -x
+          python --version
+          which python
+          pytest tests/ -v --tb=long --maxfail=1
+        env:
+          DEBUG: "1"
 
       - name: Pytest (Hermes skill)
         run: pytest hermes/skills/sapi-monitor/tests/ -v --tb=short
