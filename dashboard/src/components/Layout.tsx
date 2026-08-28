@@ -8,6 +8,7 @@ import {
   ListChecks,
   Briefcase,
   Users,
+  Activity,
   LogOut,
 } from "lucide-react";
 
@@ -49,20 +50,36 @@ export default function Layout() {
             </NavLink>
           ))}
           {user?.role === "admin" && (
-            <NavLink
-              to="/users"
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-brand-50 text-brand-700"
-                    : "text-gray-600 hover:bg-gray-100",
-                )
-              }
-            >
-              <Users className="h-4 w-4" />
-              Usuarios
-            </NavLink>
+            <>
+              <NavLink
+                to="/users"
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-brand-50 text-brand-700"
+                      : "text-gray-600 hover:bg-gray-100",
+                  )
+                }
+              >
+                <Users className="h-4 w-4" />
+                Usuarios
+              </NavLink>
+              <NavLink
+                to="/monitoring"
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-brand-50 text-brand-700"
+                      : "text-gray-600 hover:bg-gray-100",
+                  )
+                }
+              >
+                <Activity className="h-4 w-4" />
+                Monitoreo
+              </NavLink>
+            </>
           )}
         </nav>
         <div className="border-t p-4">

@@ -32,6 +32,7 @@ def _process_boletin_task(boletin_id: int, pdf_path: str, user_id: int) -> None:
             conn=conn,
             settings=cfg,
             notify=False,
+            boletin_id=boletin_id,
         )
         conn.commit()
     except Exception as e:

@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = "SAPI-Agent <noreply@sapi-agent.local>"
     notify_cooldown_hours: int = 24
+    sapi_alert_emails: str = ""
 
     max_upload_mb: int = 300
 
@@ -77,6 +78,10 @@ class Settings(BaseSettings):
     @property
     def smtp_configured(self) -> bool:
         return bool(self.smtp_host and self.smtp_user and self.smtp_password)
+
+    @property
+    def alert_emails_list(self) -> list[str]:
+        return [e.strip() for e in self.sapi_alert_emails.split(",") if e.strip()]
 
 
 @lru_cache(maxsize=1)

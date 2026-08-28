@@ -154,6 +154,7 @@ class DetectionOut(BaseModel):
     fuente_parsing: Optional[str] = None
     es_figura: bool = False
     es_lema: bool = False
+    needs_hermes_reverify: bool = False
 
 
 # ── /api/structured (Hermes → API) ────────────────────────────

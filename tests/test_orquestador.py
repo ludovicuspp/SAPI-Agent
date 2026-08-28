@@ -275,3 +275,85 @@ def test_orq_structured_cap_top5(client, boletin_row, tmp_path: Path):
     )
     assert r.status_code == 200
     assert r.json()["entries_added"] == 5  # cap top-5
+
+
+# ── B1.8: reverify detection con Hermes (defensa falsos positivos) ──
+
+
+def test_orq_reverify_detection_needs_hermes(client, boletin_row, tmp_path: Path):
+    """POST /api/detections/{id}/reverify marca needs_hermes_reverify=1
+    y resetea hermes_processed_at del boletín asociado."""
+    db_file = tmp_path / "test.db"
+    conn = db.connect(db_file)
+
+    # Marcar boletin como needs_hermes_review=1
+    conn.execute(
+        "UPDATE boletines SET needs_hermes_review = 1 WHERE id = ?",
+        (boletin_row,),
+    )
+    # Crear una detection
+    admin_id = conn.execute("SELECT id FROM users WHERE email='admin@test.local'").fetchone()[0]
+    cur = conn.execute(
+        "INSERT INTO detections(boletin_id, user_id, mark_name, similarity, "
+        "match_kind, source, confidence) VALUES (?,?,?,?,?,?,?)",
+        (boletin_row, admin_id, "TEST", 0.9, "similar",
+         "pdfplumber_text", "high"),
+    )
+    detection_id = cur.lastrowid
+    # Marcar hermes_processed_at para verificar que se resetea
+    conn.execute(
+        "UPDATE boletines SET hermes_processed_at = datetime('now') WHERE id = ?",
+        (boletin_row,),
+    )
+    conn.commit()
+    conn.close()
+
+    # Necesitamos token de admin
+    from scripts.auth import create_access_token
+    from scripts.config import get_settings
+    token = create_access_token(
+        admin_id, "admin",
+        secret=get_settings().jwt_secret,
+        expires_min=60,
+    )
+    r = client.post(
+        f"/api/detections/{detection_id}/reverify",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["needs_hermes_reverify"] is True
+
+    # Verificar que hermes_processed_at del boletín fue reseteada
+    conn = db.connect(db_file)
+    bol = db.boletines_get(conn, boletin_row)
+    assert bol.hermes_processed_at is None
+    conn.close()
+
+
+def test_orq_reverify_detection_sin_needs_hermes_rechaza(client, boletin_row, tmp_path: Path):
+    """Si el boletín no requiere Hermes, el reverify devuelve 400."""
+    db_file = tmp_path / "test.db"
+    conn = db.connect(db_file)
+    admin_id = conn.execute("SELECT id FROM users WHERE email='admin@test.local'").fetchone()[0]
+    cur = conn.execute(
+        "INSERT INTO detections(boletin_id, user_id, mark_name, similarity, "
+        "match_kind, source, confidence) VALUES (?,?,?,?,?,?,?)",
+        (boletin_row, admin_id, "X", 0.9, "similar", "pdfplumber_text", "high"),
+    )
+    detection_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    from scripts.auth import create_access_token
+    from scripts.config import get_settings
+    token = create_access_token(
+        admin_id, "admin",
+        secret=get_settings().jwt_secret,
+        expires_min=60,
+    )
+    r = client.post(
+        f"/api/detections/{detection_id}/reverify",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 400

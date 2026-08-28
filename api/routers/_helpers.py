@@ -96,6 +96,7 @@ def detection_to_out(r: db.DetectionRow) -> DetectionOut:
         fuente_parsing=r.fuente_parsing,
         es_figura=bool(r.es_figura),
         es_lema=bool(r.es_lema),
+        needs_hermes_reverify=bool(getattr(r, "needs_hermes_reverify", 0)),
     )
 
 

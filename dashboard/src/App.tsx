@@ -10,6 +10,7 @@ import Detections from "@/pages/Detections";
 import WatchlistPage from "@/pages/Watchlist";
 import PortfolioPage from "@/pages/Portfolio";
 import UsersPage from "@/pages/Users";
+import MonitoringPage from "@/pages/Monitoring";
 import NotFound from "@/pages/NotFound";
 
 export default function App() {
@@ -36,6 +37,14 @@ export default function App() {
             element={
               <AdminRoute>
                 <UsersPage />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="monitoring"
+            element={
+              <AdminRoute>
+                <MonitoringPage />
               </AdminRoute>
             }
           />

@@ -13,6 +13,7 @@ import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
+from typing import Literal
 from typing import Iterable
 
 import aiosmtplib
@@ -177,3 +178,103 @@ def render_digest(
 </body></html>
 """.strip()
     return subject, html
+
+
+# ── Eventos de sistema (boletines, fallos, acciones) ──────────────
+
+
+EventKind = Literal[
+    "boletin_nuevo",
+    "extraccion_completada",
+    "analisis_completado",
+    "accion_estado",
+    "fallo_sistema",
+]
+
+
+def _render_event_subject(kind: EventKind, context: dict) -> str:
+    label = {
+        "boletin_nuevo": "Nuevo boletín publicado",
+        "extraccion_completada": "Extracción de datos completada",
+        "analisis_completado": "Análisis de datos completado",
+        "accion_estado": "Cambio de estado detectado",
+        "fallo_sistema": "Fallo en el sistema",
+    }[kind]
+    suffix = context.get("boletin_label") or context.get("filename") or ""
+    return f"[SAPI-Agent] {label}: {suffix}".rstrip(": ")
+
+
+def _render_event_html(kind: EventKind, context: dict) -> str:
+    rows = "".join(
+        f"<tr><td><b>{k}</b></td><td>{v}</td></tr>"
+        for k, v in context.items()
+        if v is not None
+    )
+    return f"""
+<html><body style="font-family:Arial,sans-serif;color:#222">
+  <h2 style="color:#2c3e50">{_render_event_subject(kind, context)}</h2>
+  <table style="border-collapse:collapse">{rows}</table>
+  <hr/>
+  <p style="color:#666;font-size:12px">
+    SAPI-Agent · monitoreo automático de marcas registradas en SAPI Venezuela.
+  </p>
+</body></html>
+""".strip()
+
+
+def send_event(
+    *,
+    kind: EventKind,
+    to_addresses: list[str],
+    context: dict,
+    settings: Settings | None = None,
+) -> DeliveryResult:
+    """Envía un evento del sistema a una lista de destinatarios.
+
+    Eventos soportados:
+    - ``boletin_nuevo``: boletín subido al sistema.
+    - ``extraccion_completada``: pdfplumber + parsers finalizaron.
+    - ``analisis_completado``: matching contra watchlist/portfolio terminó.
+    - ``accion_estado``: cambio de estado detectado en portfolio propio.
+    - ``fallo_sistema``: error en cualquier etapa (pull_deploy, processor, etc.).
+
+    Si SMTP no está configurado (``smtp_configured=False``), degrada a
+    ``log.warning`` y devuelve ``sent=0, failed=[]``. Esto preserva la
+    idempotencia: el caller no debe fallar si SMTP está vacío.
+    """
+    cfg = settings or get_settings()
+    if not cfg.smtp_configured:
+        log.warning(
+            "SMTP no configurado; evento %s no se envió. Context: %s",
+            kind, context,
+        )
+        return DeliveryResult(sent=0, failed=[])
+
+    subject = _render_event_subject(kind, context)
+    html = _render_event_html(kind, context)
+    sent: list[int] = []
+    failed: list[int] = []
+
+    async def _run_all() -> None:
+        for idx, to_addr in enumerate(to_addresses):
+            msg = _build_message(
+                from_addr=cfg.smtp_from,
+                to_addr=to_addr,
+                subject=subject,
+                html=html,
+            )
+            try:
+                await _send_one(
+                    msg,
+                    host=cfg.smtp_host,
+                    port=cfg.smtp_port,
+                    user=cfg.smtp_user,
+                    password=cfg.smtp_password,
+                )
+                sent.append(idx)
+            except (smtplib.SMTPException, ssl.SSLError, OSError) as e:
+                log.error("Falló envío evento %s a %s: %s", kind, to_addr, e)
+                failed.append(idx)
+
+    asyncio.run(_run_all())
+    return DeliveryResult(sent=len(sent), failed=failed)

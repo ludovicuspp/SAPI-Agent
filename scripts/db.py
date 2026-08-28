@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS detections (
         CHECK (confidence IN ('high','medium','low')),
     raw_excerpt TEXT,
     detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+    needs_hermes_reverify INTEGER NOT NULL DEFAULT 0,
     notified_email INTEGER NOT NULL DEFAULT 0,
     notified_at TEXT,
     pais TEXT,
@@ -180,6 +181,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("detections", "fuente_parsing", "TEXT"),
         ("detections", "es_figura", "INTEGER NOT NULL DEFAULT 0"),
         ("detections", "es_lema", "INTEGER NOT NULL DEFAULT 0"),
+        ("detections", "needs_hermes_reverify", "INTEGER NOT NULL DEFAULT 0"),
     ]
     for table, column, typedef in migrations:
         try:
@@ -531,6 +533,7 @@ class DetectionRow:
     fuente_parsing: Optional[str] = None
     es_figura: int = 0
     es_lema: int = 0
+    needs_hermes_reverify: int = 0
 
 
 def _detection_from_row(row: sqlite3.Row) -> DetectionRow:

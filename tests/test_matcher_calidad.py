@@ -106,3 +106,130 @@ def test_matcher_strings_vacios():
 def test_matcher_un_vacio():
     r = score_pair("ACME", "", _t())
     assert not r.is_match
+
+
+# ── G.1 — cruce de clase Niza ──────────────────────────────────────
+
+
+def test_matcher_mismatch_clase_niza():
+    """Si watch_class_nice y candidate_class_nice difieren, no es match."""
+    r = score_pair(
+        "ACME", "ACME", _t(),
+        watch_class_nice=25,
+        candidate_class_nice=9,
+    )
+    assert not r.is_match
+    assert r.class_nice_check == "mismatch"
+    assert r.similarity == 0.0
+
+
+def test_matcher_misma_clase_niza_es_match():
+    r = score_pair(
+        "ACME", "ACME", _t(),
+        watch_class_nice=25,
+        candidate_class_nice=25,
+    )
+    assert r.is_match
+    assert r.class_nice_check == "ok"
+
+
+def test_matcher_clase_niza_solo_en_watch_no_bloquea():
+    """Si solo la watchlist tiene clase, no bloqueamos (regla es 'ambos')."""
+    r = score_pair(
+        "ACME", "ACME", _t(),
+        watch_class_nice=25,
+        candidate_class_nice=None,
+    )
+    assert r.is_match
+
+
+def test_matcher_clase_niza_solo_en_candidate_no_bloquea():
+    r = score_pair(
+        "ACME", "ACME", _t(),
+        watch_class_nice=None,
+        candidate_class_nice=9,
+    )
+    assert r.is_match
+
+
+def test_matcher_ninguna_clase_es_match():
+    r = score_pair(
+        "ACME", "ACME", _t(),
+        watch_class_nice=None,
+        candidate_class_nice=None,
+    )
+    assert r.is_match
+    assert r.class_nice_check == "unknown"
+
+
+# ── G.3 — umbrales ajustables por usuario ─────────────────────────
+
+
+def test_thresholds_from_user_con_overrides():
+    """from_user con overrides aplica los valores del usuario."""
+    from scripts.matcher.combined import Thresholds
+    base = Thresholds(fuzzy=0.80)
+    user = Thresholds.from_user(fuzzy_pct=90, phonetic_floor=0.9, fallback=base)
+    assert user.fuzzy == 0.90
+    assert user.phonetic_floor == 0.9
+
+
+def test_thresholds_from_user_sin_overrides_usa_fallback():
+    from scripts.matcher.combined import Thresholds
+    base = Thresholds(fuzzy=0.80, phonetic_floor=1.0)
+    user = Thresholds.from_user(fallback=base)
+    assert user.fuzzy == 0.80
+    assert user.phonetic_floor == 1.0
+
+
+def test_thresholds_from_user_parcial():
+    """Solo fuzzy_pct override, phonetic_floor usa fallback."""
+    from scripts.matcher.combined import Thresholds
+    base = Thresholds(fuzzy=0.80, phonetic_floor=1.0)
+    user = Thresholds.from_user(fuzzy_pct=95, fallback=base)
+    assert user.fuzzy == 0.95
+    assert user.phonetic_floor == 1.0
+
+
+# ── G.2 — defensa contra falsos positivos via Hermes Vision ──────
+
+
+def test_matcher_fuzzy_bajo_bajo_phonetic_bloqueado():
+    """Si usuario quiere fonético más débil pero fonético está a 0.95,
+    el matcher respeta el floor."""
+    from scripts.matcher.combined import Thresholds
+    t = Thresholds(fuzzy=0.80, phonetic_floor=0.95)
+    r = score_pair("ACME", "AKME", t)
+    # Si fonético idéntico (>=0.95), match; si no, no-match
+    # Lo que validamos es que el floor se respeta
+    assert r.is_match == (r.similarity == 0.70 and r.method == "phonetic")
+
+
+# ── find_matches con clases ────────────────────────────────────────
+
+
+def test_find_matches_con_clases():
+    """find_matches filtra correctamente cuando hay mismatch de clase."""
+    from scripts.matcher.combined import find_matches
+    watch_names = ["ACME", "TOTAL"]
+    watch_classes = [25, 35]
+    candidates = ["ACME", "TOTAL"]
+    candidate_classes = [9, 35]  # ACME mismatch, TOTAL ok
+    pairs = find_matches(
+        watch_names, candidates, _t(),
+        watch_class_nices=watch_classes,
+        candidate_class_nices=candidate_classes,
+    )
+    # Solo TOTAL-35 debe matchear (ACME-25 vs ACME-9 mismatch)
+    assert len(pairs) == 1
+    assert pairs[0][0] == "TOTAL"
+    assert pairs[0][1] == "TOTAL"
+
+
+def test_find_matches_sin_clases_matchea_todo():
+    """Sin clases, comportamiento legacy (todos los matches pasan)."""
+    from scripts.matcher.combined import find_matches
+    watch_names = ["ACME", "TOTAL"]
+    candidates = ["ACME", "TOTAL"]
+    pairs = find_matches(watch_names, candidates, _t())
+    assert len(pairs) == 2

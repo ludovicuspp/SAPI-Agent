@@ -10,10 +10,12 @@ from fastapi.staticfiles import StaticFiles
 
 from scripts.config import get_settings
 
+from api.middleware import ApiVersioningMiddleware
 from api.routers import (
     auth,
     boletines,
     detections,
+    metrics,
     portfolio,
     structured,
     summary,
@@ -90,6 +92,10 @@ def create_app() -> FastAPI:
     _app.include_router(detections.router, prefix="/api/detections", tags=["detections"])
     _app.include_router(structured.router, prefix="/api/boletines", tags=["structured"])
     _app.include_router(summary.router, prefix="/api/summary", tags=["summary"])
+    _app.include_router(metrics.router, prefix="/api/admin/metrics", tags=["metrics"])
+
+    # Versionado de API: /api/v0/* se mapea a /api/* (compat).
+    _app.add_middleware(ApiVersioningMiddleware)
 
     @_app.get("/api/health")
     async def health() -> dict:

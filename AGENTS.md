@@ -129,6 +129,20 @@ cat ~/.ssh/id_ed25519_sapi_cicd.pub >> ~/.ssh/authorized_keys
 # subir la clave privada como secret SSH_PRIVATE_KEY en GitHub
 ```
 
+### Claves SSH en `~/.ssh/` (estado actual)
+
+| Clave | Estado | Notas |
+|---|---|---|
+| `id_ed25519_sapi_cicd` (+.pub) | en `authorized_keys`, ya **no se usa** (CD es pull-based) | generada para CI/CD; conservar por si se vuelve a SSH-based |
+| `id_ed25519_sapi_new` (+.pub) | en `authorized_keys` (label `sapi-access`) | acceso SSH general del usuario `luisv` |
+| `id_ed25519_sapi` (+.pub) | **NO** está en `authorized_keys` | clave huérfana, candidata a borrar (confirmar antes) |
+
+Para limpiar la huérfana cuando confirmes que no se usa:
+
+```bash
+rm ~/.ssh/id_ed25519_sapi ~/.ssh/id_ed25519_sapi.pub
+```
+
 ## Comandos
 
 | Capa | Comando | Notas |

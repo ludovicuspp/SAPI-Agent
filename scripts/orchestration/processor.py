@@ -95,12 +95,17 @@ def process_pdf(
     conn: sqlite3.Connection,
     settings: Settings | None = None,
     notify: bool = False,
+    boletin_id: Optional[int] = None,
 ) -> ProcessResult:
     """Procesa un PDF end-to-end. Retorna un ``ProcessResult``.
 
     Lanza ``FileNotFoundError`` si el PDF no existe. Si el pipeline
     falla a mitad, marca el boletín como ``failed`` con el mensaje
     de error y registra en ``scans_log``.
+
+    Si se pasa ``boletin_id``, reutiliza esa fila en lugar de crear
+    una nueva (usado por ``/api/boletines/upload`` para no duplicar
+    filas por el mismo SHA).
     """
     cfg = settings or get_settings()
     start = time.monotonic()
@@ -112,13 +117,14 @@ def process_pdf(
     file_sha = pdf_meta.hash_file(pdf_path)
     filename = pdf_path.name
 
-    boletin_id = boletines_create(
-        conn,
-        uploaded_by=user_id,
-        filename=filename,
-        file_path=str(pdf_path),
-        file_sha256=file_sha,
-    )
+    if boletin_id is None:
+        boletin_id = boletines_create(
+            conn,
+            uploaded_by=user_id,
+            filename=filename,
+            file_path=str(pdf_path),
+            file_sha256=file_sha,
+        )
 
     try:
         extraction = pdf_text.extract(pdf_path)
@@ -195,6 +201,8 @@ def process_pdf(
         # Solo entries matcheables participan en el matching.
         matcheable_entries = [e for e in entries if e.matcheable]
         candidate_names = [e.marca for e in matcheable_entries if e.marca]
+        candidate_classes = [e.clase for e in matcheable_entries if e.marca]
+        watch_classes = [w.class_nice for w in watch]
         thresholds = combined.Thresholds.from_settings(
             cfg.match_threshold, cfg.fuzzy_threshold
         )
@@ -211,7 +219,9 @@ def process_pdf(
 
         if watch_names and candidate_names:
             match_pairs = combined.find_matches(
-                watch_names, candidate_names, thresholds
+                watch_names, candidate_names, thresholds,
+                watch_class_nices=watch_classes,
+                candidate_class_nices=candidate_classes,
             )
             for watch_name, candidate, mr in match_pairs:
                 entry = entries_by_name.get(candidate)
