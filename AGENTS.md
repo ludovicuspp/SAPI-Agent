@@ -1,237 +1,174 @@
 # AGENTS.md
 
-Guía compacta para sesiones de OpenCode en este repositorio.
+Guía compacta para OpenCode. Producto: `docs/objetivos.md`. Contrato: `Specs/`.
 
 ## Proyecto
 
-SAPI-Agent: monitoreo de marcas registradas en SAPI Venezuela
-(Servicio Autónomo de la Propiedad Intelectual). Detalle de
-objetivos en [`docs/objetivos.md`](docs/objetivos.md).
+Monitoreo de marcas SAPI Venezuela. Fases 1–5 en prod
+(`https://marcas.solutechve.net`): Caddy del proveedor →
+`sapi-api.service` (`0.0.0.0:8000`).
 
 ## Idioma
 
-- **Español** para documentación, comentarios, mensajes de error,
-  emails y UI.
-- **Inglés** para identificadores de código (Python/JS). Los strings
-  visibles al usuario, en español.
+- Español: docs, comentarios, errores, emails, UI.
+- Inglés: identificadores Python/JS.
 
-## Estado actual del repo
+## Layout
 
-El repo se construye por fases. Lo que **sí existe hoy** (hasta Fase 5):
-
-- `scripts/` — capa Python: extractores, parsers, matcher, db, CLI.
-- `api/` — FastAPI REST API con auth JWT, CRUD multi-tenant,
-  uploads + background tasks, WebSocket, structured (Hermes).
-- `dashboard/` — SPA React (Vite + TS + Tailwind + Zustand) con
-  login, summary, boletines, detecciones, watchlist, portfolio,
-  users. 32 tests Vitest.
-- `tests/` — pytest con fixtures (`tests/fixtures/sample_boletin.pdf`,
-  `tests/conftest.py::tmp_db`). **186 tests** (140 backend + 22 Hermes +
-  11 matcher calidad + 22 alucinaciones + 7 orquestador + 5 pipeline E2E
-  con boletín real BPI 654 + 32 dashboard Vitest).
-- `hermes/` — manifiesto `SOUL.md` + skill `sapi-monitor` (Fase 5).
-
-Lo que **aún no existe** (no inventes estructura):
-
-- Otros skills de Hermes más allá de `sapi-monitor`.
-- No hay `pyproject.toml`, ni config de `ruff`/`mypy`/`black`, ni
-  pre-commit. Si necesitas uno, pregunta antes de añadir.
-- CI: existe `.github/workflows/ci.yml` (jobs `backend` +
-  `dashboard` + `gate`), pero está **untracked** en el repo. No lo
-  asumas en PRs sin antes verificar si se quiere commitear.
-
-## Fase 5 — Skill Hermes `sapi-monitor`
-
-Orquesta la revisión visual de boletines con `needs_hermes_review=1`
-(páginas con imágenes o encoding roto). Vive en
-`hermes/skills/sapi-monitor/`:
-
-| Archivo | Función |
+| Path | Qué es |
 |---|---|
-| `SKILL.md` | Frontmatter Hermes + flujo operacional (decide visión vs texto) |
-| `watchdog.sh` | Monitor estable para el cron (no imprime timestamps) |
-| `scripts/pending_boletines.py` | Lista pendientes (CLI, usable como watchdog) |
-| `scripts/db_utils.py` | Lectura read-only de `data/sapi.db` |
-| `scripts/extract_page.py` | Texto de una página o render a PNG |
-| `scripts/submit.py` | POST entries a `/api/boletines/{id}/structured` |
-| `tests/` | 22 tests pytest |
+| `scripts/` | Core: `cli.py`, `db.py`, `config.py`, `schemas.py`, `auth.py`. Subdirs: `extractors/`, `parsers/` (A/B/C + `patterns/`), `matcher/`, `orchestration/`, `notifiers/` |
+| `api/` | FastAPI. Schemas en `scripts/schemas.py`, no en `api/` |
+| `dashboard/` | Vite + React 19 + TS. Alias `@` → `src/` |
+| `hermes/skills/sapi-monitor/` | Única skill Hermes; no inventar otras |
+| `tests/` | pytest. PDF sintético: `tests/fixtures/sample_boletin.pdf` |
+| `Specs/` | Requisitos con estado real; no duplicar aquí |
 
-**Ejecución como archivo** (no como paquete; el directorio lleva
-guion y no es importable):
+No hay `pyproject.toml`, ruff, mypy, black ni pre-commit.
+**Pregunta antes de añadirlos.**
+
+## Setup
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+cp .env.example .env          # raíz del repo, NO scripts/
+python -m scripts.cli init-db
+```
+
+- `.env` lo lee `scripts/config.py` desde `REPO_ROOT/.env`.
+- `JWT_SECRET` default emite `warnings.warn`.
+- `init-db` siembra admin si `ADMIN_EMAIL`+`ADMIN_PASSWORD` y no hay admins.
+- Local: Python 3.14. **CI usa 3.12** (wheels nativos fallan en 3.14).
+- Dev: `httpx2` en `requirements-dev.txt` (no añadir `httpx`).
+
+## Comandos
+
+| Qué | Comando |
+|---|---|
+| Schema | `python -m scripts.cli init-db` |
+| Usuario | `python -m scripts.cli create-user --email … --role admin\|agent` |
+| Watchlist | `python -m scripts.cli add-watchlist --user-email … --name … [--class-nice N]` |
+| Portfolio | `python -m scripts.cli add-portfolio --user-email … --name … [--expediente …]` |
+| Listar WL | `python -m scripts.cli list-watchlist --user-email … [--only-active]` |
+| Listar PF | `python -m scripts.cli list-portfolio --user-email …` |
+| Detecciones | `python -m scripts.cli list-detections --user-email … [--limit N]` |
+| PDF e2e | `python -m scripts.cli process-boletin PATH --user-email … [--notify]` |
+| Digest | `python -m scripts.cli send-digest --user-email …` |
+| Stats | `python -m scripts.cli stats --user-email …` |
+| API dev | `uvicorn api.main:app --reload --port 8000` |
+| API prod | unidad `sapi-api.service` (no adivinar el binario) |
+| Dash dev | `cd dashboard && npm run dev` (`:5173`; proxy `/api` → `:8000`) |
+| Dash build | `cd dashboard && npm run build` → `dashboard/dist/` (incluye `tsc -b`) |
+| Tests API | `pytest tests/` o `pytest tests/test_api.py` |
+| Tests Hermes | `pytest hermes/skills/sapi-monitor/tests` |
+| Tests UI | `cd dashboard && npm test` |
+| Tests UI (watch) | `cd dashboard && npm run test:watch` |
+
+SMTP ausente: `send-digest` imprime el HTML y no envía.
+
+## Tests — trampas
+
+- `get_settings` está en `lru_cache`: en tests que tocan env,
+  `get_settings.cache_clear()` al entrar y al salir (ver
+  `tests/test_api.py`).
+- Fixture `tmp_db` = SQLite temporal. Hermes tests también; **no**
+  requieren `data/sapi.db`.
+- `tests/test_pipeline_e2e.py` **skipea** si no está
+  `data/uploads/BPI 654 listo.pdf` (gitignored). En CI suele skippearse.
+- Dashboard: Vitest + jsdom; setup en `dashboard/vitest-setup.ts`
+  (polyfill localStorage para Node 26+).
+
+## Hermes `sapi-monitor`
+
+Directorio con guion: **ejecutar como archivo**, no como paquete.
+Bootstrap de `sys.path` en `scripts/_bootstrap.py`.
 
 ```bash
 python hermes/skills/sapi-monitor/scripts/pending_boletines.py [--db data/sapi.db]
 python hermes/skills/sapi-monitor/scripts/extract_page.py --pdf X.pdf --page N [--render DIR]
 python hermes/skills/sapi-monitor/scripts/submit.py --boletin-id 1 --entries e.json
-pytest hermes/skills/sapi-monitor/tests
 ```
 
-Cada script hace bootstrap de `sys.path` (`scripts/_bootstrap.py`)
-para importar `scripts.*` del repo.
+- `submit.py` usa `urllib` (stdlib). Header `X-Hermes-Token` =
+  `SERVICE_TOKEN_HERMES`. Token vacío → API 503.
+- Skill **solo lee** SQLite. Matching y persistencia:
+  `POST /api/boletines/{id}/structured` (máx. 100 entries; top-5
+  matches; si `hermes_processed_at` → `already_processed`).
+- Watchdog: stdout **estable** (sin timestamps). Hermes rechaza
+  symlinks fuera de `~/.hermes/scripts/` → **copiar** `watchdog.sh`,
+  no enlazar. Detalle en `hermes/skills/sapi-monitor/SKILL.md`.
 
-`submit.py` usa la stdlib (`urllib`) por defecto → **no añade
-dependencias** y no falla por falta de `httpx`. Se autentica con
-`X-Hermes-Token` (`SERVICE_TOKEN_HERMES` del `.env` raíz).
+## Dashboard servido por FastAPI
 
-**Cron**: Hermes rechaza symlinks que escapen de `~/.hermes/scripts/`;
-el `watchdog.sh` se **copia** (no se enlaza) ahí. El stdout del
-watchdog debe ser **estable** (sin timestamps) para que Hermes compare
-por hash y solo dispare al agente cuando cambie. Detalle en
-`SKILL.md`.
+`api/main.py` monta `dashboard/dist/` (`/assets` + fallback SPA).
+Rutas que no intercepta: `api/`, `docs`, `openapi.json`, `redoc`.
+Sin `dist/` → SPA 503; la API sigue.
 
-**Regla clave**: la skill solo **lee** la BD y **no calcula
-similitudes**. El endpoint `structured.py` hace matching en Python y
-marca `hermes_processed_at` (defensa contra duplicados).
+- Prod: `dashboard/.env.production` deja `VITE_API_BASE_URL=` **vacío**.
+  Los fetches ya van a `/api/...`; un base `/api` duplica el prefijo.
+  `dashboard/.env` está gitignored; `.env.production` sí se commitea.
+  Documentación del gotcha: `dashboard/.env.example`.
+- WS: `wsBase()` = origen de la página.
+  Path real: `/api/boletines/ws/{id}`. El proxy Vite `/ws` es residual.
+- Alias `/api/v0/*` → `/api/*` en `api/middleware.py` (ASGI puro).
+  **No** uses `BaseHTTPMiddleware` (rompe con Starlette + Py 3.12+).
 
-## Setup
+## CI / CD
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt          # runtime
-pip install -r requirements-dev.txt      # pytest + pytest-asyncio
-cp .env.example .env                     # editar JWT_SECRET y credenciales
-```
+`.github/workflows/ci.yml` (trackeado): push/PR a `main`. Python 3.12,
+Node 22. Backend = pytest partido en steps; dashboard = `npm ci`,
+`npm run build` (`tsc -b`), `npm test`. Artefacto `dist/` obligatorio.
 
-- `.env` vive en la **raíz del repo** (`scripts/config.py:14-29` lo
-  lee con `pydantic-settings`). Si lo pones en `scripts/`, no se carga.
-- `JWT_SECRET` con el valor por defecto emite `warnings.warn` al
-  instanciar `Settings` (`scripts/config.py:60-70`). Genera uno real
-  con `python -c "import secrets; print(secrets.token_urlsafe(64))"`.
-- `init-db` siembra el usuario admin inicial si `ADMIN_EMAIL` y
-  `ADMIN_PASSWORD` están definidos en `.env` y no hay admins
-  (`scripts/cli.py:82-108`).
+`.github/workflows/cd.yml`: espera 60 s y hace curl al health público.
+**No despliega.** El deploy es pull-based (SSH público no llega a esta VM;
+secrets `SSH_*` no se usan):
 
-## Cleanup de Secrets SSH_* (legado)
+- `sapi-pull.timer` — **user** systemd, cada 5 min, `Linger=yes`.
+  Estado: `systemctl --user status sapi-pull.timer`.
+- `scripts/pull_deploy.sh` — `git pull --ff-only`, pip, dashboard
+  build, `sudo -n systemctl restart sapi-api.service`, health local.
+  Log: `/var/log/sapi-pull.log`. Lock: `/home/luisv/data/sapi-pull.lock`.
+- Manual: `bash scripts/pull_deploy.sh`.
+- Unidades de referencia en `scripts/systemd/`; la API de prod es la
+  unidad **system** `sapi-api.service` (`EnvironmentFile` = `.env` raíz).
+  No arrancar el leftover `~/.config/systemd/user/sapi-agent.service`.
 
-Cuando se diseñó el CD inicialmente era SSH-based. Por la imposibilidad de
-alcanzar esta VM por SSH público (el puerto 22 responde un servidor Debian
-del proveedor, no Ubuntu 26.04), el CD pasó a ser **pull-based** mediante
-`sapi-pull.timer` + `scripts/pull_deploy.sh`. Los secrets
-`SSH_HOST`, `SSH_USER`, `SSH_PORT`, `SSH_PRIVATE_KEY` ya **no se usan** y
-se recomienda eliminarlos del repo para hygiene:
+## Proxy (uploads grandes)
 
-- **UI**: Settings → Secrets and variables → Actions → borrar cada uno.
-- **CLI** (si tienes `gh` autenticado):
-  ```bash
-  gh secret delete SSH_HOST --repo ludovicuspp/SAPI-Agent
-  gh secret delete SSH_USER --repo ludovicuspp/SAPI-Agent
-  gh secret delete SSH_PORT --repo ludovicuspp/SAPI-Agent
-  gh secret delete SSH_PRIVATE_KEY --repo ludovicuspp/SAPI-Agent
-  ```
+Caddy del proveedor termina TLS y hace `reverse_proxy 127.0.0.1:8000`.
+El `Caddyfile` **no vive en el repo** (está en el panel del proveedor,
+ver `Specs/07-proxy.md`). Subir PDFs de `MAX_UPLOAD_MB=300` requiere
+`max_size 300MB` + timeouts `600s` en el proxy; sin eso, subidas
+grandes (`file.read()` con pdfplumber sobre PDFs de 1000+ páginas)
+reciben 413/504. No asumas que tocar la API basta: 413/504 en prod
+suele ser cap del proxy, no del backend.
 
-Si vuelves a un CD SSH-based en otra VM con IP pública alcanzable, **vuelve
-a crear el par**:
+## Convenciones
 
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_sapi_cicd -N "" -C "sapi-agent-cicd-runner"
-cat ~/.ssh/id_ed25519_sapi_cicd.pub >> ~/.ssh/authorized_keys
-# subir la clave privada como secret SSH_PRIVATE_KEY en GitHub
-```
-
-### Claves SSH en `~/.ssh/` (estado actual)
-
-| Clave | Estado | Notas |
-|---|---|---|
-| `id_ed25519_sapi_cicd` (+.pub) | en `authorized_keys`, ya **no se usa** (CD es pull-based) | generada para CI/CD; conservar por si se vuelve a SSH-based |
-| `id_ed25519_sapi_new` (+.pub) | en `authorized_keys` (label `sapi-access`) | acceso SSH general del usuario `luisv` |
-| `id_ed25519_sapi` (+.pub) | **NO** está en `authorized_keys` | clave huérfana, candidata a borrar (confirmar antes) |
-
-Para limpiar la huérfana cuando confirmes que no se usa:
-
-```bash
-rm ~/.ssh/id_ed25519_sapi ~/.ssh/id_ed25519_sapi.pub
-```
-
-## Comandos
-
-| Capa | Comando | Notas |
-|---|---|---|
-| Crear esquema | `python -m scripts.cli init-db` | idempotente; crea `data/sapi.db` |
-| Crear usuario | `python -m scripts.cli create-user --email ... --role admin\|agent` | pide contraseña por TTY salvo `--password` |
-| Procesar PDF | `python -m scripts.cli process-boletin PATH --user-email ... [--notify]` | pipeline end-to-end |
-| Listar detecciones | `python -m scripts.cli list-detections --user-email ...` | |
-| Digest por email | `python -m scripts.cli send-digest --user-email ...` | requiere SMTP configurado |
-| Pull deploy manual | `bash scripts/pull_deploy.sh` | mismo flujo que `sapi-pull.timer`; ver logs en `/var/log/sapi-pull.log` |
-| Estado pull timer | `systemctl --user status sapi-pull.timer` | user systemd, activa cada 5 min, `Linger=yes` |
-| Forzar rotación log | `sudo /usr/sbin/logrotate -f /etc/logrotate.conf` | rotación forzada (la automática corre diaria) |
-| Arrancar API | `uvicorn api.main:app --reload --port 8000` | dev; Swagger: `http://localhost:8000/docs` |
-| Build Dashboard | `cd dashboard && npm run build` | genera `dashboard/dist/`; la API lo sirve en prod (SPA) |
-| Arrancar Dashboard (dev) | `cd dashboard && npm run dev` | Vite en `:5173`; proxy `/api` y `/ws` → `:8000` |
-| Arrancar API (prod) | `uvicorn api.main:app --host 127.0.0.1 --port 8000` | sirve `dist/` si existe; detrás de reverse proxy |
-| Tests API | `pytest tests/` | o un archivo: `pytest tests/test_api.py` |
-| Tests Hermes | `pytest hermes/skills/sapi-monitor/tests` | 22 tests; requieren `data/sapi.db` en algunas fixtures |
-| Tests Dashboard | `cd dashboard && npm test` | o watch: `cd dashboard && npm run test:watch` |
-
-## CI (`.github/workflows/ci.yml`)
-
-Workflow con tres jobs en paralelo sobre push/PR a `main`:
-
-| Job | Qué ejecuta |
-|---|---|
-| `backend` | `pytest tests/ -v --tb=short` + `pytest hermes/skills/sapi-monitor/tests/ -v --tb=short` |
-| `dashboard` | `npm ci`, `npm run build` (que incluye `tsc -b`), `npm test`, sube `dashboard/dist` como artefacto |
-| `gate` | depende de los dos anteriores; imprime "CI passed" |
-
-Python 3.14, Node 22. El job `dashboard` falla si `dist/` no se
-genera (artefacto con `if-no-files-found: error`).
-
-## Publicación del dashboard
-
-- El dashboard se compila a estático y FastAPI lo sirve en el mismo
-  proceso. **Sin nginx/caddy local**: la SPA la sirve `api/main.py`
-  (`_mount_dashboard`), montando `/assets` como estático y devolviendo
-  `index.html` como fallback SPA para toda ruta que no empiece por
-  `api/`, `docs`, `openapi.json` o `redoc`.
-- En **producción** `dashboard/.env.production` define
-  `VITE_API_BASE_URL=` (vacío, **no** `/api`). El código de la SPA
-  ya antepone `/api` a cada path (`request("/api/auth/login")`),
-  así que el base debe ser vacío para no duplicar el prefijo. La
-  constante en `dashboard/src/lib/api.ts:1` cae a `""` por
-  defecto. El WebSocket **no necesita variable**: `wsBase()`
-  (`dashboard/src/lib/api.ts:55-61`) resuelve el protocolo/host
-  actual de la página (`wss://…` si es https);
-  `VITE_WS_BASE_URL` es un override opcional. El CORS solo necesita
-  el dominio público (`API_CORS_ORIGINS` en `.env` raíz).
-- En **desarrollo** `dashboard/.env` define
-  `VITE_API_BASE_URL=http://localhost:8000` y Vite proxifica `/api` y
-  `/ws` a FastAPI (`dashboard/vite.config.ts`). El WebSocket va al
-  origen de la página (`ws://localhost:5173`) y el proxy lo enruta a
-  `:8000`.
-- Pasos para desplegar: `cd dashboard && npm run build` y reiniciar la
-  API (`uvicorn api.main:app --host 127.0.0.1 --port 8000`). Si `dist/`
-  no existe, la SPA devuelve 503 con mensaje claro; la API sigue viva.
-
-Si SMTP no está configurado, `send-digest` imprime el HTML en pantalla
-en vez de enviarlo (`scripts/cli.py:297-301`).
-
-## Convenciones clave
-
-- **Multi-tenant**: `watchlist`, `portfolio`, `boletines`,
-  `detections` tienen `user_id`. `scripts/db.py` recibe `user_id`
-  explícito; la API lo filtra por `current_user.id` salvo rol `admin`.
-- **Una sola capa de acceso a datos**: CLI y API escriben vía
-  `scripts/db.py` (`api/deps.py::get_db` abre una conexión por
-  request). Hermes y la skill **solo leen** la BD; las detecciones
-  se escriben vía `POST /api/boletines/{id}/structured`.
-- **Match scores siempre en Python** (`scripts/matcher/`): exact,
-  fuzzy (rapidfuzz), phonetic (jellyfish), combinados. Hermes y el
-  LLM solo extraen campos; nunca calculan similitud.
-- **Trazabilidad de detections**: cada fila guarda
-  `source ∈ {pdfplumber_text, hermes_llm, hermes_vision}` y
-  `confidence ∈ {high, medium, low}`. No inventes otros valores.
-- **Patrones de parser**: las entradas del boletín se reconocen por
-  patrón A/B/C, definidos en `scripts/parsers/patterns/`. Añadir un
-  patrón nuevo requiere también su test en `tests/test_patterns.py`.
+- Multi-tenant: `watchlist` / `portfolio` / `detections` tienen
+  `user_id`. **`boletines` usa `uploaded_by`**, no `user_id`.
+  API filtra por `current_user.id` salvo rol `admin`.
+- Una sola capa de datos: `scripts/db.py`. CLI y API escriben ahí
+  (`api/deps.py::get_db` = una conexión por request).
+- SQLite con `check_same_thread=False` (threadpool de uvicorn).
+- Scores **siempre** en `scripts/matcher/`. Si ambos `class_nice`
+  están definidos y difieren → no-match. Hermes/LLM no calculan similitud.
+- `source ∈ {pdfplumber_text, hermes_llm, hermes_vision}`,
+  `confidence ∈ {high, medium, low}`,
+  `match_kind ∈ {similar, own_status}`,
+  `role ∈ {admin, agent}`. Estatus: `EstatusLiteral` en
+  `scripts/schemas.py`. No inventes valores.
+- Dedupe detections: UNIQUE `(boletin_id, expediente, watchlist_id)`.
+- Patrón de parser nuevo → `scripts/parsers/patterns/` + test en
+  `tests/test_patterns.py`.
 
 ## No hacer
 
-- No scrapear `sapi.gob.ve`; los boletines los suben los usuarios.
-- No automatizar login a WEBPI (reCAPTCHA v3).
-- No escribir en SQLite desde Hermes; siempre vía `POST /api/boletines/{id}/structured`.
-- No añadir dependencias fuera de `requirements.txt` /
+- No scrapear `sapi.gob.ve`. No automatizar WEBPI (reCAPTCHA v3).
+- No escribir SQLite desde Hermes; siempre el POST `structured`.
+- No añadir deps fuera de `requirements.txt` /
   `requirements-dev.txt` / `dashboard/package.json` sin pedirlo.
-- No commitear `.env`, `data/sapi.db*`, ni PDFs en `data/uploads/`
-  (ya está en `.gitignore`).
-- No crear `api/`, `dashboard/`, ni poblar `hermes/skills/` por tu
-  cuenta: pregunta primero qué fase toca.
+- No commitear `.env`, `data/sapi.db*`, ni PDFs en `data/uploads/`.
+- No crear skills Hermes extra ni tooling Python de lint/format
+  sin preguntar.

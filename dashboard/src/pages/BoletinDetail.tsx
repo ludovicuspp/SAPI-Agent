@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { request } from "@/lib/api";
 import { watchBoletinProgress } from "@/lib/ws";
 import { statusLabel, statusColor } from "@/lib/format";
@@ -9,6 +9,7 @@ import type { Boletin, BoletinProgress } from "@/types/api";
 
 export default function BoletinDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [boletin, setBoletin] = useState<Boletin | null>(null);
   const [progress, setProgress] = useState<BoletinProgress | null>(null);
 
@@ -33,6 +34,18 @@ export default function BoletinDetail() {
 
   const isExtracting = boletin.status === "extracting" || progress?.status === "extracting";
   const displayStatus = progress?.status ?? boletin.status;
+
+  const handleDelete = async () => {
+    if (!window.confirm(
+      `¿Eliminar el boletín "${boletin.filename}" y todas sus detecciones? Esta acción no se puede deshacer.`,
+    )) return;
+    try {
+      await request<void>(`/api/boletines/${boletin.id}`, { method: "DELETE" });
+      navigate("/boletines");
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Error al eliminar");
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -86,6 +99,17 @@ export default function BoletinDetail() {
         <Link to={`/detections?boletin_id=${boletin.id}`}>
           <Button>Ver detecciones de este boletín</Button>
         </Link>
+      )}
+
+      {!isExtracting && (
+        <div className="border-t pt-6">
+          <Button variant="destructive" onClick={handleDelete}>
+            Eliminar boletín
+          </Button>
+          <p className="mt-2 text-xs text-gray-500">
+            Se borra el registro, sus detecciones y el PDF si ningún otro boletín lo usa.
+          </p>
+        </div>
       )}
     </div>
   );

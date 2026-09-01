@@ -473,6 +473,24 @@ def boletines_get(conn: sqlite3.Connection, boletin_id: int) -> Optional[Boletin
     return _boletin_from_row(row) if row else None
 
 
+def boletines_count_with_sha(conn: sqlite3.Connection, file_sha256: str) -> int:
+    """Cuenta cuántos boletines comparten el mismo `file_sha256`.
+
+    Se usa antes de borrar el PDF en disco: si queda al menos uno, no
+    se elimina el archivo (otro boletín lo sigue referenciando).
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM boletines WHERE file_sha256 = ?",
+        (file_sha256,),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def boletines_delete(conn: sqlite3.Connection, boletin_id: int) -> None:
+    """Elimina la fila del boletín; las `detections` caen por CASCADE."""
+    conn.execute("DELETE FROM boletines WHERE id = ?", (boletin_id,))
+
+
 def boletines_list_pending_hermes(
     conn: sqlite3.Connection, limit: int = 50
 ) -> list[BoletinRow]:

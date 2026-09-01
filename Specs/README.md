@@ -24,6 +24,7 @@ del código (verificado contra `scripts/`, `api/`, `hermes/`).
 | 04 | [`04-arquitectura.md`](04-arquitectura.md) | Arquitectura de capas y flujo end-to-end |
 | 05 | [`05-base-de-datos.md`](05-base-de-datos.md) | Esquema relacional (5 tablas) |
 | 06 | [`06-api.md`](06-api.md) | Contrato REST + WebSocket (v0) |
+| 07 | [`07-proxy.md`](07-proxy.md) | Snippets del reverse proxy (Caddy) para subir PDFs de 300 MB |
 
 ## Estado de implementación
 

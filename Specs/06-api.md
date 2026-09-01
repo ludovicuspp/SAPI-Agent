@@ -30,6 +30,7 @@
 | POST | `/api/portfolio` | sí | Añade entrada (`PortfolioIn`) |
 | GET | `/api/boletines` | sí | Lista boletines del usuario |
 | GET | `/api/boletines/{id}` | sí | Detalle de un boletín |
+| DELETE | `/api/boletines/{id}` | sí (uploader o admin) | Borra el boletín, sus detecciones y el PDF si nadie más lo usa |
 | POST | `/api/boletines/upload` | sí | Sube PDF (multipart, max 300 MB) → background task |
 | WS | `/api/boletines/ws/{id}` | sí | WebSocket de progreso |
 | POST | `/api/boletines/{id}/structured` | Hermes | Hermes postea entries (max 100, con `X-Hermes-Token`) |

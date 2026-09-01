@@ -15,8 +15,8 @@ export function UploadZone({ onUploaded }: UploadZoneProps) {
         setError("Solo se aceptan archivos PDF");
         return;
       }
-      if (file.size > 50 * 1024 * 1024) {
-        setError("El archivo excede 50 MB");
+      if (file.size > 300 * 1024 * 1024) {
+        setError("El archivo excede 300 MB");
         return;
       }
       setError("");

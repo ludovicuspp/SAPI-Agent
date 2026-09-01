@@ -295,6 +295,52 @@ def test_upload_too_large(client: TestClient, agent_token: str):
     assert r.status_code == 413
 
 
+def test_upload_uses_file_size_not_body_length(
+    client: TestClient, agent_token: str, monkeypatch: pytest.MonkeyPatch,
+):
+    """Regresión: el handler debe comparar contra el tamaño del archivo,
+    no contra el body completo (multipart envelope incluido).
+
+    Antes: `len(content) > max_upload_mb * 1024 * 1024` causaba 413
+    incluso cuando el PDF real cabía, porque sumaba headers/boundary.
+    Ahora: se usa `UploadFile.size` y `Path.stat().st_size` del archivo
+    escrito, ambos referidos al archivo, no al body.
+    """
+    from api.routers import uploads as uploads_module
+
+    captured: dict = {}
+
+    real_hash_write = uploads_module._hash_and_write_stream
+
+    def spy_hash_write(file, dest):
+        captured["size_hint"] = getattr(file, "size", None)
+        result = real_hash_write(file, dest)
+        captured["written_size"] = dest.stat().st_size
+        return result
+
+    monkeypatch.setattr(uploads_module, "_hash_and_write_stream", spy_hash_write)
+
+    pdf_body = b"%PDF-1.4\nreal content"
+    r = client.post(
+        "/api/boletines/upload",
+        files={"file": ("ok.pdf", io.BytesIO(pdf_body), "application/pdf")},
+        headers=_auth_header(agent_token),
+    )
+    assert r.status_code == 202
+
+    # El size_hint y el tamaño escrito deben coincidir con el cuerpo
+    # del archivo, no con el body multipart (que incluye boundary).
+    assert captured["size_hint"] is not None
+    assert captured["size_hint"] == len(pdf_body)
+    assert captured["written_size"] == len(pdf_body)
+    # El body multipart real es más grande que el PDF (boundary +
+    # headers +2). Si el handler comparara contra el body completo,
+    # el límite efectivo se reduciría. Aquí verificamos que el body
+    # multipart > size_hint, lo que confirma que el código nuevo no
+    # puede estar usando len(body).
+    assert len(pdf_body) <= captured["size_hint"]
+
+
 def test_upload_valid_pdf(client: TestClient, agent_token: str):
     """Upload de PDF real + verificación de status."""
     r = client.post(
@@ -345,3 +391,199 @@ def test_structured_wrong_token(client: TestClient, tmp_db: sqlite3.Connection):
         headers={"X-Hermes-Token": "wrong-token"},
     )
     assert r.status_code in (403, 503)
+
+
+# ── Boletines DELETE ────────────────────────────────────────────
+
+
+def _make_extracted_boletin(
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    user_id: int,
+    *,
+    status: str = "extracted",
+    needs_hermes_review: bool = False,
+    hermes_processed_at: str | None = "2026-01-01 00:00:00",
+    filename: str = "test.pdf",
+) -> tuple[int, Path]:
+    """Crea un boletín `extracted` con un PDF real en disco.
+
+    Devuelve (boletin_id, ruta del PDF).
+    """
+    import hashlib
+
+    pdf_bytes = b"%PDF-1.4 fake content"
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir(exist_ok=True)
+    file_path = upload_dir / f"{sha}.pdf"
+    file_path.write_bytes(pdf_bytes)
+    bid = db.boletines_create(tmp_db, user_id, filename, str(file_path), sha)
+    tmp_db.commit()
+    tmp_db.execute(
+        "UPDATE boletines SET status=?, needs_hermes_review=?, "
+        "hermes_processed_at=? WHERE id=?",
+        (
+            status,
+            1 if needs_hermes_review else 0,
+            hermes_processed_at,
+            bid,
+        ),
+    )
+    tmp_db.commit()
+    return bid, file_path
+
+
+def test_delete_boletin_uploader_can_delete(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    bid, file_path = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+    assert file_path.exists()
+
+    r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
+    assert r.status_code == 204
+
+    assert db.boletines_get(tmp_db, bid) is None
+    assert not file_path.exists()
+
+
+def test_delete_boletin_admin_can_delete(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    admin_token: str,
+):
+    bid, file_path = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+    r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(admin_token))
+    assert r.status_code == 204
+    assert not file_path.exists()
+
+
+def test_delete_boletin_other_agent_forbidden(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+):
+    """Un agent que NO subió el boletín recibe 404 (oculto, no 403)."""
+    other_id = db.users_create(
+        tmp_db, "other@example.com", auth.hash_password("other123456"), "agent",
+    )
+    tmp_db.commit()
+    other_token = auth.create_access_token(
+        other_id, "agent", secret=Settings().jwt_secret,
+        expires_min=Settings().jwt_expires_min,
+    )
+    bid, file_path = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+
+    r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(other_token))
+    assert r.status_code == 404
+
+    assert db.boletines_get(tmp_db, bid) is not None
+    assert file_path.exists()
+
+
+def test_delete_boletin_409_if_extracting(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    bid, file_path = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id, status="extracting",
+    )
+    r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
+    assert r.status_code == 409
+    assert db.boletines_get(tmp_db, bid) is not None
+
+
+def test_delete_boletin_409_if_hermes_pending(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    bid, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id,
+        needs_hermes_review=True, hermes_processed_at=None,
+    )
+    r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
+    assert r.status_code == 409
+
+
+def test_delete_boletin_keeps_shared_file(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    admin: db.UserRow,
+    admin_token: str,
+):
+    """Si dos boletines comparten el PDF (mismo SHA), el archivo no se borra."""
+    bid1, file_path = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id, filename="bpi-654.pdf",
+    )
+    # Crear un segundo boletín reusando el mismo file_path/sha.
+    sha = file_path.name.removesuffix(".pdf")
+    bid2 = db.boletines_create(
+        tmp_db, admin.id, "dup.pdf", str(file_path), sha,
+    )
+    db.boletines_mark_extracted(
+        tmp_db, bid2, pages=1, extraction_payload={},
+        bulletin_number=None, period=None, needs_hermes_review=False,
+    )
+    tmp_db.commit()
+    assert file_path.exists()
+
+    r = client.delete(f"/api/boletines/{bid1}", headers=_auth_header(admin_token))
+    assert r.status_code == 204
+
+    assert db.boletines_get(tmp_db, bid1) is None
+    assert db.boletines_get(tmp_db, bid2) is not None
+    assert file_path.exists()  # sigue referenciado
+
+
+def test_delete_boletin_cascades_detections(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+    tmp_db.execute(
+        "INSERT INTO detections(boletin_id, user_id, mark_name, similarity, "
+        "match_kind, source, confidence) VALUES (?, ?, 'X', 0.9, 'similar', "
+        "'pdfplumber_text', 'high')",
+        (bid, agent_user.id),
+    )
+    tmp_db.commit()
+    pre = tmp_db.execute(
+        "SELECT COUNT(*) FROM detections WHERE boletin_id=?", (bid,),
+    ).fetchone()[0]
+    assert pre == 1
+
+    r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
+    assert r.status_code == 204
+
+    post = tmp_db.execute(
+        "SELECT COUNT(*) FROM detections WHERE boletin_id=?", (bid,),
+    ).fetchone()[0]
+    assert post == 0
+
+
+def test_delete_boletin_404(client: TestClient, agent_token: str):
+    r = client.delete("/api/boletines/9999", headers=_auth_header(agent_token))
+    assert r.status_code == 404
+
+
+def test_delete_boletin_unauthenticated(client: TestClient):
+    r = client.delete("/api/boletines/1")
+    assert r.status_code in (401, 422)

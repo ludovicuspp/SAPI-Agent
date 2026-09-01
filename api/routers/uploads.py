@@ -17,8 +17,24 @@ from scripts.schemas import UploadOut
 router = APIRouter()
 
 
-def _hash_bytes(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
+_MAX_SPOOL_BYTES = 1024 * 1024  # 1 MB; chunks de lectura/escritura.
+
+
+def _hash_and_write_stream(file: UploadFile, dest: Path) -> str:
+    """Hashea y escribe el archivo por chunks. Devuelve el SHA-256 hex.
+
+    Mantiene el uso de RAM acotado al tamaño del chunk, no al PDF
+    completo.
+    """
+    sha = hashlib.sha256()
+    with dest.open("wb") as fh:
+        while True:
+            chunk = file.file.read(_MAX_SPOOL_BYTES)
+            if not chunk:
+                break
+            sha.update(chunk)
+            fh.write(chunk)
+    return sha.hexdigest()
 
 
 def _process_boletin_task(boletin_id: int, pdf_path: str, user_id: int) -> None:
@@ -57,19 +73,49 @@ async def upload_boletin(
     cfg = get_settings()
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos PDF")
-    content = await file.read()
-    if len(content) > cfg.max_upload_mb * 1024 * 1024:
-        raise HTTPException(status_code=413, detail=f"PDF excede {cfg.max_upload_mb} MB")
-    if len(content) == 0:
+
+    # Tamaño anunciado por Starlette (no incluye headers/boundary del multipart).
+    # Si no está disponible, recurrimos a la cabecera Content-Length del part.
+    size_hint = getattr(file, "size", None)
+    max_bytes = cfg.max_upload_mb * 1024 * 1024
+    if size_hint is not None and size_hint == 0:
         raise HTTPException(status_code=400, detail="Archivo vacío")
+    if size_hint is not None and size_hint > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF excede {cfg.max_upload_mb} MB",
+        )
 
-    sha = _hash_bytes(content)
-    upload_path = Path(cfg.uploads_dir) / f"{sha}.pdf"
-    upload_path.parent.mkdir(parents=True, exist_ok=True)
-    upload_path.write_bytes(content)
+    # Hashear + escribir a disco por chunks. `file.file` es un
+    # SpooledTemporaryFile; leerlo en trozos evita cargar el PDF
+    # completo en RAM.
+    await file.seek(0)
+    upload_path = Path(cfg.uploads_dir)
+    upload_path.mkdir(parents=True, exist_ok=True)
+    tmp_path = upload_path / f".{file.filename}.part"
+    try:
+        sha = _hash_and_write_stream(file, tmp_path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise
 
-    boletin_id = db.boletines_create(conn, user.id, file.filename, str(upload_path), sha)
-    background_tasks.add_task(_process_boletin_task, boletin_id, str(upload_path), user.id)
+    final_size = tmp_path.stat().st_size
+    if final_size == 0:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Archivo vacío")
+    if final_size > max_bytes:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF excede {cfg.max_upload_mb} MB",
+        )
+
+    final_path = upload_path / f"{sha}.pdf"
+    tmp_path.rename(final_path)
+
+    boletin_id = db.boletines_create(conn, user.id, file.filename, str(final_path), sha)
+    background_tasks.add_task(_process_boletin_task, boletin_id, str(final_path), user.id)
     conn.commit()
 
     return UploadOut(boletin_id=boletin_id, status="extracting")
