@@ -789,13 +789,17 @@ def boletines_mark_stale_extracting_as_failed(
     """Marca como ``failed`` los boletines en ``extracting`` con tareas
     huérfanas.
 
-    Detecta dos casos:
+    Detecta tres casos:
       1. ``progress_step IS NULL`` y ``uploaded_at > N min``: tarea que
          murió antes de empezar a reportar progreso (crash de import,
          OOM al cargar el PDF, etc.).
       2. ``progress_step`` no terminal y ``progress_updated_at > N min``:
          tarea que reportó progreso pero quedó atascada a mitad
          (kill -9 del servicio, SIGKILL del proceso, etc.).
+      3. ``progress_updated_at IS NULL`` y ``progress_step`` no terminal
+         y ``uploaded_at > N min``: boletines subidos antes de que se
+         añadiera la columna ``progress_updated_at`` (``90e843d``); su
+         ``progress_step`` quedó con valor pero sin timestamp fiable.
 
     Esta función la invoca ``_process_boletin_task`` al arrancar (antes
     de empezar la suya) para limpiar el estado de runs anteriores que
@@ -812,8 +816,16 @@ def boletines_mark_stale_extracting_as_failed(
         "        OR (progress_updated_at IS NOT NULL"
         "           AND progress_step NOT IN ('done', 'failed')"
         "           AND datetime(progress_updated_at) < datetime('now', ?))"
+        "        OR (progress_updated_at IS NULL"
+        "           AND progress_step IS NOT NULL"
+        "           AND progress_step NOT IN ('done', 'failed')"
+        "           AND datetime(uploaded_at) < datetime('now', ?))"
         "   )",
-        (f"-{threshold_minutes} minutes", f"-{threshold_minutes} minutes"),
+        (
+            f"-{threshold_minutes} minutes",
+            f"-{threshold_minutes} minutes",
+            f"-{threshold_minutes} minutes",
+        ),
     ).fetchall()
     if not rows:
         return []

@@ -710,6 +710,19 @@ def test_mark_stale_extracting_as_failed(
         (orphan_stuck,),
     )
 
+    # Huérfano de tipo 3 (caso BPI_652): progress_step no terminal pero
+    # progress_updated_at NULL porque se subió antes de añadir la columna.
+    orphan_legacy, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id, status="extracting",
+    )
+    tmp_db.execute(
+        "UPDATE boletines SET progress_step='extracting_text', "
+        "progress_current_page=534, progress_total_pages=1852, "
+        "progress_updated_at=NULL, "
+        "uploaded_at=datetime('now', '-15 minutes') WHERE id=?",
+        (orphan_legacy,),
+    )
+
     # Boletin "vivo" reciente: no debe tocarse.
     fresh, _ = _make_extracted_boletin(
         tmp_db, tmp_path, agent_user.id, status="extracting",
@@ -738,11 +751,13 @@ def test_mark_stale_extracting_as_failed(
         tmp_db, threshold_minutes=10,
     )
 
-    # Ambos huérfanos (tipo 1 y tipo 2) deben marcarse.
-    assert sorted(marked) == sorted([orphan_never_started, orphan_stuck])
+    # Los tres huérfanos deben marcarse.
+    assert sorted(marked) == sorted(
+        [orphan_never_started, orphan_stuck, orphan_legacy]
+    )
 
     # Los huérfanos quedan en failed con mensaje.
-    for bid in (orphan_never_started, orphan_stuck):
+    for bid in (orphan_never_started, orphan_stuck, orphan_legacy):
         b = db.boletines_get(tmp_db, bid)
         assert b.status == "failed"
         assert b.progress_step == "failed"
@@ -760,7 +775,7 @@ def test_mark_stale_extracting_as_failed(
     # scans_log tiene entradas de error para los huérfanos.
     err_rows = tmp_db.execute(
         "SELECT boletin_id, status FROM scans_log "
-        " WHERE boletin_id IN (?, ?) AND status='error'",
-        (orphan_never_started, orphan_stuck),
+        " WHERE boletin_id IN (?, ?, ?) AND status='error'",
+        (orphan_never_started, orphan_stuck, orphan_legacy),
     ).fetchall()
-    assert len(err_rows) == 2
+    assert len(err_rows) == 3
