@@ -778,6 +778,53 @@ def boletines_update_progress(
     )
 
 
+def boletines_mark_stale_extracting_as_failed(
+    conn: sqlite3.Connection,
+    *,
+    threshold_minutes: int = 10,
+) -> list[int]:
+    """Marca como ``failed`` los boletines en ``extracting`` con tareas
+    huérfanas.
+
+    Una tarea se considera huérfana cuando:
+      - lleva más de ``threshold_minutes`` en ``extracting``
+      - y ``progress_step`` sigue ``NULL`` (señal de que el background
+        task nunca escribió progreso: murió antes de empezar o nunca
+        arrancó)
+
+    Esta función la invoca ``_process_boletin_task`` al arrancar (antes
+    de empezar la suya) para limpiar el estado de runs anteriores que
+    murieron silenciosamente (OOM, SIGKILL, crash de import, etc.).
+
+    Devuelve la lista de boletines marcados.
+    """
+    rows = conn.execute(
+        "SELECT id, filename, uploaded_at FROM boletines "
+        " WHERE status = 'extracting' AND progress_step IS NULL "
+        "   AND datetime(uploaded_at) < datetime('now', ?)",
+        (f"-{threshold_minutes} minutes",),
+    ).fetchall()
+    if not rows:
+        return []
+    ids = [r[0] for r in rows]
+    placeholders = ",".join("?" * len(ids))
+    conn.execute(
+        f"UPDATE boletines SET status='failed', "
+        f"error='Tarea de extracción no respondía (huérfana tras >{threshold_minutes} min)', "
+        f"progress_step='failed' WHERE id IN ({placeholders})",
+        ids,
+    )
+    for r in rows:
+        scans_log_record(
+            conn,
+            kind="extract",
+            status="error",
+            boletin_id=r[0],
+            detail=f"Tarea huérfana (uploaded_at={r[1]}); marcada failed automáticamente.",
+        )
+    return ids
+
+
 def boletines_get(conn: sqlite3.Connection, boletin_id: int) -> Optional[BoletinRow]:
     row = conn.execute("SELECT * FROM boletines WHERE id = ?", (boletin_id,)).fetchone()
     return _boletin_from_row(row) if row else None

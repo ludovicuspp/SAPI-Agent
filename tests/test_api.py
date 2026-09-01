@@ -675,3 +675,76 @@ def test_delete_boletin_with_scans_log(
         "SELECT COUNT(*) FROM scans_log WHERE boletin_id = ?", (bid,),
     ).fetchone()[0]
     assert rows == 0
+
+
+def test_mark_stale_extracting_as_failed(
+    tmp_db: sqlite3.Connection, tmp_path: Path, agent_user: db.UserRow,
+):
+    """Boletines en extracting > N min sin progress_step se marcan failed."""
+    import time as _time
+
+    # Boletin "huérfano" antiguo: status=extracting, progress_step=NULL,
+    # uploaded_at hace 30 minutos.
+    orphan_id, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id,
+        status="extracting",
+    )
+    tmp_db.execute(
+        "UPDATE boletines SET progress_step=NULL, progress_current_page=NULL, "
+        "progress_total_pages=NULL, uploaded_at=datetime('now', '-30 minutes') "
+        "WHERE id=?",
+        (orphan_id,),
+    )
+    # Boletin "vivo" reciente (10 seg): no debe tocarse.
+    fresh_id, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id,
+        status="extracting",
+    )
+    tmp_db.execute(
+        "UPDATE boletines SET progress_step=NULL, "
+        "progress_current_page=NULL, progress_total_pages=NULL, "
+        "uploaded_at=datetime('now', '-10 seconds') WHERE id=?",
+        (fresh_id,),
+    )
+    # Boletin "vivo" con progress_step actualizado: no debe tocarse.
+    updated_id, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id,
+        status="extracting",
+    )
+    tmp_db.execute(
+        "UPDATE boletines SET progress_step='extracting_text', "
+        "progress_current_page=10, progress_total_pages=100, "
+        "uploaded_at=datetime('now', '-30 minutes') WHERE id=?",
+        (updated_id,),
+    )
+    tmp_db.commit()
+
+    marked = db.boletines_mark_stale_extracting_as_failed(
+        tmp_db, threshold_minutes=10,
+    )
+    assert marked == [orphan_id]
+
+    orphan = db.boletines_get(tmp_db, orphan_id)
+    assert orphan is not None
+    assert orphan.status == "failed"
+    assert orphan.progress_step == "failed"
+    assert "huérfana" in (orphan.error or "").lower()
+
+    fresh = db.boletines_get(tmp_db, fresh_id)
+    assert fresh is not None
+    assert fresh.status == "extracting"
+    assert fresh.progress_step is None
+
+    updated = db.boletines_get(tmp_db, updated_id)
+    assert updated is not None
+    assert updated.status == "extracting"
+    assert updated.progress_step == "extracting_text"
+
+    # scans_log tiene una entrada de error para el huérfano
+    err = tmp_db.execute(
+        "SELECT status, detail FROM scans_log WHERE boletin_id=?",
+        (orphan_id,),
+    ).fetchone()
+    assert err is not None
+    assert err[0] == "error"
+    assert "huérf" in (err[1] or "").lower()

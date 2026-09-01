@@ -38,10 +38,19 @@ def _hash_and_write_stream(file: UploadFile, dest: Path) -> str:
 
 
 def _process_boletin_task(boletin_id: int, pdf_path: str, user_id: int) -> None:
-    """Background task: procesa el PDF completo en un thread separado."""
+    """Background task: procesa el PDF completo en un thread separado.
+
+    Antes de empezar, limpia boletines huérfanos en ``extracting`` (tareas
+    que murieron silenciosamente en un run anterior: OOM, SIGKILL, crash).
+    """
     cfg = Settings()
     conn = db.connect(cfg.sapi_db_path)
     try:
+        try:
+            db.boletines_mark_stale_extracting_as_failed(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
         processor.process_pdf(
             Path(pdf_path),
             user_id=user_id,
