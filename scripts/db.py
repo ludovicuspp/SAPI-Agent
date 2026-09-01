@@ -110,7 +110,10 @@ CREATE TABLE IF NOT EXISTS boletines (
     entries_matcheables INTEGER NOT NULL DEFAULT 0,
     entries_hermes_pending INTEGER NOT NULL DEFAULT 0,
     entries_figura INTEGER NOT NULL DEFAULT 0,
-    entries_lema INTEGER NOT NULL DEFAULT 0
+    entries_lema INTEGER NOT NULL DEFAULT 0,
+    progress_step TEXT,
+    progress_current_page INTEGER,
+    progress_total_pages INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_boletines_status ON boletines(status);
 CREATE INDEX IF NOT EXISTS idx_boletines_needs_hermes
@@ -191,11 +194,15 @@ def init_db(db_path: str | Path) -> None:
     puedan faltar en bases de datos creadas con versiones anteriores
     (Fase 2 original). Esto permite actualizar la BD en caliente sin
     perder datos.
+
+    Importante: las migraciones se aplican ANTES del ``SCHEMA_SQL``
+    para que las columnas referenciadas por índices existan al
+    ejecutar el script (e.g. ``idx_portfolio_registro``).
     """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with connect(db_path) as conn:
-        conn.executescript(SCHEMA_SQL)
         _migrate_add_columns(conn)
+        conn.executescript(SCHEMA_SQL)
         conn.commit()
 
 
@@ -210,6 +217,9 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("boletines", "entries_hermes_pending", "INTEGER NOT NULL DEFAULT 0"),
         ("boletines", "entries_figura", "INTEGER NOT NULL DEFAULT 0"),
         ("boletines", "entries_lema", "INTEGER NOT NULL DEFAULT 0"),
+        ("boletines", "progress_step", "TEXT"),
+        ("boletines", "progress_current_page", "INTEGER"),
+        ("boletines", "progress_total_pages", "INTEGER"),
         ("detections", "pais", "TEXT"),
         ("detections", "fecha_inscripcion", "TEXT"),
         ("detections", "fuente_parsing", "TEXT"),
@@ -243,8 +253,16 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
             # La columna ya existe; ignorar.
             pass
     # Índices por identidad (registro / solicitud) tras garantizar columnas.
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_registro ON portfolio(registro)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_solicitud ON portfolio(solicitud)")
+    # Se hace aquí para que funcione en BD viejas que aún no tengan la
+    # tabla portfolio (init_db corre migraciones ANTES del SCHEMA_SQL).
+    for stmt in (
+        "CREATE INDEX IF NOT EXISTS idx_portfolio_registro ON portfolio(registro)",
+        "CREATE INDEX IF NOT EXISTS idx_portfolio_solicitud ON portfolio(solicitud)",
+    ):
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass
 
 
 @contextmanager
@@ -653,6 +671,9 @@ class BoletinRow:
     entries_hermes_pending: int = 0
     entries_figura: int = 0
     entries_lema: int = 0
+    progress_step: Optional[str] = None
+    progress_current_page: Optional[int] = None
+    progress_total_pages: Optional[int] = None
 
 
 def _boletin_from_row(row: sqlite3.Row) -> BoletinRow:
@@ -720,8 +741,40 @@ def boletines_mark_failed(
     conn: sqlite3.Connection, boletin_id: int, error: str
 ) -> None:
     conn.execute(
-        "UPDATE boletines SET status='failed', error=? WHERE id = ?",
+        "UPDATE boletines SET status='failed', error=?, progress_step='failed' WHERE id = ?",
         (error, boletin_id),
+    )
+
+
+def boletines_update_progress(
+    conn: sqlite3.Connection,
+    boletin_id: int,
+    *,
+    step: Optional[str] = None,
+    current_page: Optional[int] = None,
+    total_pages: Optional[int] = None,
+) -> None:
+    """Actualiza el progreso visible del boletín (status='extracting').
+
+    Los parámetros ``None`` no se tocan; pasar un valor lo actualiza.
+    """
+    sets: list[str] = []
+    params: list = []
+    if step is not None:
+        sets.append("progress_step = ?")
+        params.append(step)
+    if current_page is not None:
+        sets.append("progress_current_page = ?")
+        params.append(current_page)
+    if total_pages is not None:
+        sets.append("progress_total_pages = ?")
+        params.append(total_pages)
+    if not sets:
+        return
+    params.append(boletin_id)
+    conn.execute(
+        f"UPDATE boletines SET {', '.join(sets)} WHERE id = ?",
+        params,
     )
 
 

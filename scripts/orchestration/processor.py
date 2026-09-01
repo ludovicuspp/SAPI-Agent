@@ -32,17 +32,17 @@ from scripts.db import (
     boletines_get,
     boletines_mark_extracted,
     boletines_mark_failed,
+    boletines_update_progress,
     detections_add,
     detections_mark_notified,
     detections_pending_notification,
-    portfolio_list_for_user,
-    portfolio_update_status,
     scans_log_record,
     watchlist_list_for_user,
 )
 from scripts.extractors import pdf_meta, pdf_text
 from scripts.matcher import combined
 from scripts.notifiers import email_smtp
+from scripts.orchestration.portfolio_sync import verify_entries_for_user
 from scripts.parsers import boletin_header
 from scripts.parsers.marca_entry import MarcaEntryParser, MarcaEntry, ParseStats
 
@@ -126,9 +126,36 @@ def process_pdf(
             file_sha256=file_sha,
         )
 
+    def _report_progress(
+        step: str,
+        current_page: Optional[int] = None,
+        total_pages: Optional[int] = None,
+    ) -> None:
+        boletines_update_progress(
+            conn,
+            boletin_id,
+            step=step,
+            current_page=current_page,
+            total_pages=total_pages,
+        )
+        conn.commit()
+
     try:
-        extraction = pdf_text.extract(pdf_path)
+        _report_progress("extracting_text")
+
+        def _on_page(page_no: int, total: int) -> None:
+            boletines_update_progress(
+                conn,
+                boletin_id,
+                current_page=page_no,
+                total_pages=total,
+            )
+            # commit por página: el WebSocket de progreso ve avance real.
+            conn.commit()
+
+        extraction = pdf_text.extract(pdf_path, on_page=_on_page)
         pages_total = pdf_meta.count_pages(pdf_path)
+        _report_progress("parsing_entries", current_page=pages_total, total_pages=pages_total)
 
         parser_text = _build_parser_text(extraction.pages)
         metadata = boletin_header.detect(parser_text)
@@ -195,6 +222,7 @@ def process_pdf(
         )
 
         # ── Match contra watchlist ───────────────────────────
+        _report_progress("matching")
         watch = watchlist_list_for_user(conn, user_id, only_active=True)
         watch_names = [w.name for w in watch]
 
@@ -253,41 +281,18 @@ def process_pdf(
                 )
                 detections_created += 1
 
-        # ── Match contra portafolio propio (status update) ────
-        portfolio = portfolio_list_for_user(conn, user_id)
-        for entry in entries:
-            if not entry.expediente:
-                continue
-            for p in portfolio:
-                if p.expediente and p.expediente.strip() == entry.expediente.strip():
-                    detections_add(
-                        conn,
-                        boletin_id=boletin_id,
-                        user_id=user_id,
-                        portfolio_id=p.id,
-                        mark_name=entry.marca or "",
-                        similarity=1.0,
-                        match_kind="own_status",
-                        source="pdfplumber_text",
-                        confidence="high",
-                        expediente=entry.expediente,
-                        titular=entry.titular,
-                        class_nice=entry.clase_niza,
-                        page=entry.page,
-                        raw_excerpt=entry.excerpt,
-                        pais=entry.pais,
-                        fecha_inscripcion=entry.fecha_inscripcion,
-                        fuente_parsing=entry.fuente_parsing,
-                        es_figura=1 if entry.es_figura else 0,
-                        es_lema=1 if entry.es_lema else 0,
-                    )
-                    detections_created += 1
-                    if entry.estatus:
-                        portfolio_update_status(
-                            conn, p.id, entry.estatus, user_id
-                        )
+        # ── Match contra portafolio propio (regla temporal + historial) ──
+        sync_result = verify_entries_for_user(
+            conn,
+            user_id,
+            boletines_get(conn, boletin_id),
+            entries,
+            source="pdfplumber_text",
+        )
+        detections_created += sync_result.matched
 
         # ── Notificación por email (opcional) ─────────────────
+        _report_progress("notifying")
         emailed = 0
         email_failed = 0
         if notify:
@@ -310,6 +315,7 @@ def process_pdf(
                     emailed = delivery.sent
                     email_failed = len(delivery.failed)
 
+        _report_progress("done", current_page=pages_total, total_pages=pages_total)
         duration_ms = int((time.monotonic() - start) * 1000)
         scans_log_record(
             conn,

@@ -34,7 +34,7 @@ describe("formatClass", () => {
 
 describe("statusLabel", () => {
   it("maps known statuses", () => {
-    expect(statusLabel("extracting")).toBe("Extrayendo…");
+    expect(statusLabel("extracting")).toBe("Extrayendo");
     expect(statusLabel("extracted")).toBe("Extraído");
     expect(statusLabel("failed")).toBe("Error");
   });

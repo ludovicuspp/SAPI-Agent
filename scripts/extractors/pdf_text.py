@@ -8,6 +8,7 @@ correctamente esos casos.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable, Optional
 
 import pdfplumber
 
@@ -25,9 +26,13 @@ def _has_cid_encoding(pages: list[PageExtract]) -> bool:
     return False
 
 
-def _extract_with_pdfplumber(pdf_path: Path) -> list[PageExtract]:
+def _extract_with_pdfplumber(
+    pdf_path: Path,
+    on_page: Optional[Callable[[int, int], None]] = None,
+) -> list[PageExtract]:
     pages: list[PageExtract] = []
     with pdfplumber.open(pdf_path) as pdf:
+        total = len(pdf.pages)
         for index, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
             text = text.strip()
@@ -41,15 +46,21 @@ def _extract_with_pdfplumber(pdf_path: Path) -> list[PageExtract]:
                     low_confidence=is_low_confidence(text),
                 )
             )
+            if on_page is not None:
+                on_page(index, total)
     return pages
 
 
-def _extract_with_pymupdf(pdf_path: Path) -> list[PageExtract]:
+def _extract_with_pymupdf(
+    pdf_path: Path,
+    on_page: Optional[Callable[[int, int], None]] = None,
+) -> list[PageExtract]:
     import pymupdf
 
     pages: list[PageExtract] = []
     with pymupdf.open(str(pdf_path)) as doc:
-        for index in range(doc.page_count):
+        total = doc.page_count
+        for index in range(total):
             page = doc[index]
             text = (page.get_text() or "").strip()
             images = page.get_images(full=True)
@@ -62,17 +73,25 @@ def _extract_with_pymupdf(pdf_path: Path) -> list[PageExtract]:
                     low_confidence=is_low_confidence(text),
                 )
             )
+            if on_page is not None:
+                on_page(index + 1, total)
     return pages
 
 
-def extract(pdf_path: Path) -> ExtractionResult:
+def extract(
+    pdf_path: Path,
+    on_page: Optional[Callable[[int, int], None]] = None,
+) -> ExtractionResult:
     """Abre el PDF y extrae texto por página.
 
     Estrategia: usa ``pdfplumber`` por defecto; si detecta ``(cid:NNN)``
     en alguna página (encoding corrupto), reintenta con ``pymupdf``
     para todo el documento.
+
+    Si se pasa ``on_page(page_no, total)``, se invoca tras extraer cada
+    página (1-indexed). Útil para reportar progreso.
     """
-    pages = _extract_with_pdfplumber(pdf_path)
+    pages = _extract_with_pdfplumber(pdf_path, on_page=on_page)
     if _has_cid_encoding(pages):
-        pages = _extract_with_pymupdf(pdf_path)
+        pages = _extract_with_pymupdf(pdf_path, on_page=on_page)
     return ExtractionResult(pages=pages, total_pages=len(pages))

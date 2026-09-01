@@ -26,6 +26,40 @@ export interface Portfolio {
   last_checked_at: string | null;
   notes: string | null;
   created_at: string;
+  pais: string | null;
+  etiqueta: string | null;
+  tipo_registro: string | null;
+  bufete: string | null;
+  solicitud: string | null;
+  fecha_solicitud: string | null;
+  registro: string | null;
+  fecha_registro: string | null;
+  fecha_vencimiento: string | null;
+  titular: string | null;
+  tramitante: string | null;
+  empresa_licenciada: string | null;
+  productos_servicios: string | null;
+  comentarios: string | null;
+  last_boletin_id: number | null;
+  last_boletin_period: string | null;
+  updated_at: string;
+}
+
+export interface PortfolioHistory {
+  id: number;
+  portfolio_id: number;
+  boletin_id: number | null;
+  boletin_period: string | null;
+  boletin_number: number | null;
+  estado: string | null;
+  snapshot: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PortfolioImportResult {
+  created: number;
+  updated: number;
+  errors: string[];
 }
 
 export type BoletinStatus =
@@ -47,6 +81,7 @@ export interface Boletin {
   pages: number | null;
   status: BoletinStatus;
   needs_hermes_review: boolean;
+  hermes_processed_at?: string | null;
   uploaded_at: string;
   processed_at: string | null;
   error: string | null;
@@ -54,6 +89,9 @@ export interface Boletin {
   entries_hermes_pending: number;
   entries_figura: number;
   entries_lema: number;
+  progress_step: string | null;
+  progress_current_page: number | null;
+  progress_total_pages: number | null;
 }
 
 export type MatchKind = "similar" | "own_status";
@@ -99,6 +137,11 @@ export interface BoletinProgress {
   boletin_id: number;
   status: BoletinStatus;
   pages: number | null;
+  progress_step: string | null;
+  progress_current_page: number | null;
+  progress_total_pages: number | null;
+  needs_hermes_review?: boolean;
+  hermes_processed_at?: string | null;
   entries_matcheables: number;
   entries_figura: number;
   entries_lema: number;

@@ -28,13 +28,38 @@ export function formatClass(n: number | null): string {
 export function statusLabel(status: string): string {
   const map: Record<string, string> = {
     pending: "Pendiente",
-    extracting: "Extrayendo…",
+    extracting: "Extrayendo",
     extracted: "Extraído",
     hermes_pending: "Esperando Hermes",
     hermes_done: "Hermes completado",
     failed: "Error",
   };
   return map[status] ?? status;
+}
+
+export function stepLabel(step: string | null | undefined): string {
+  if (!step) return "";
+  const map: Record<string, string> = {
+    extracting_text: "Leyendo texto del PDF",
+    parsing_entries: "Parseando entradas de marcas",
+    matching: "Comparando con watchlist y portfolio",
+    notifying: "Enviando notificaciones",
+    done: "Procesamiento completado",
+    failed: "Procesamiento con errores",
+  };
+  return map[step] ?? step;
+}
+
+export function isHermesInProgress(b: {
+  status: string;
+  needs_hermes_review: boolean;
+  hermes_processed_at?: string | null;
+}): boolean {
+  return (
+    b.status === "extracted" &&
+    b.needs_hermes_review &&
+    !b.hermes_processed_at
+  );
 }
 
 export function statusColor(status: string): string {

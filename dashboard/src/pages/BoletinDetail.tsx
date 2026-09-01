@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { request } from "@/lib/api";
 import { watchBoletinProgress } from "@/lib/ws";
-import { statusLabel, statusColor } from "@/lib/format";
+import { statusLabel, statusColor, stepLabel, isHermesInProgress } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import type { Boletin, BoletinProgress } from "@/types/api";
@@ -30,10 +30,37 @@ export default function BoletinDetail() {
     return unsub;
   }, [boletin?.status, id]);
 
+  // Poll Hermes: cuando extracted y needs_hermes_review, refrescar cada 3 s
+  // para detectar cuando Hermes termina.
+  useEffect(() => {
+    if (!boletin) return;
+    const hermesActive =
+      boletin.status === "extracted" &&
+      boletin.needs_hermes_review &&
+      !boletin.hermes_processed_at;
+    if (!hermesActive) return;
+    const t = window.setInterval(() => {
+      request<Boletin>(`/api/boletines/${id}`).then(setBoletin).catch(console.error);
+    }, 3000);
+    return () => window.clearInterval(t);
+  }, [boletin, id]);
+
   if (!boletin) return <div className="text-gray-500">Cargando…</div>;
 
   const isExtracting = boletin.status === "extracting" || progress?.status === "extracting";
   const displayStatus = progress?.status ?? boletin.status;
+
+  const currentStep = progress?.progress_step ?? boletin.progress_step ?? null;
+  const currentPage = progress?.progress_current_page ?? boletin.progress_current_page ?? null;
+  const totalPages = progress?.progress_total_pages ?? boletin.progress_total_pages ?? null;
+  const pctPages =
+    progress?.progress_total_pages && progress?.progress_current_page != null
+      ? Math.min(100, Math.round((progress.progress_current_page / progress.progress_total_pages) * 100))
+      : boletin.progress_total_pages && boletin.progress_current_page != null
+      ? Math.min(100, Math.round((boletin.progress_current_page / boletin.progress_total_pages) * 100))
+      : null;
+
+  const hermesActive = isHermesInProgress(boletin);
 
   const handleDelete = async () => {
     if (!window.confirm(
@@ -56,14 +83,48 @@ export default function BoletinDetail() {
 
       {isExtracting && (
         <Card>
-          <CardContent className="p-6">
-            <div className="mb-2 flex items-center justify-between text-sm">
-              <span className="font-medium">Extrayendo texto del PDF…</span>
-              {progress?.pages && <span className="text-gray-500">{progress.pages} páginas</span>}
+          <CardContent className="p-6 space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium">{stepLabel(currentStep) || "Iniciando…"}</span>
+              {currentPage != null && totalPages != null && (
+                <span className="text-gray-500">
+                  Página {currentPage} / {totalPages}
+                </span>
+              )}
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
-              <div className="h-full animate-pulse rounded-full bg-brand-500" style={{ width: "60%" }} />
+              <div
+                className="h-full rounded-full bg-brand-500 transition-[width] duration-200"
+                style={{ width: pctPages != null ? `${pctPages}%` : "10%" }}
+                data-testid="extract-progress-bar"
+              />
             </div>
+            {pctPages != null && (
+              <div className="text-xs text-gray-500">{pctPages}% completado</div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {hermesActive && (
+        <Card className="border-purple-200 bg-purple-50">
+          <CardContent className="p-6 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-purple-800">
+                Analizando por Hermes Vision
+              </span>
+              <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-purple-500" />
+            </div>
+            <p className="text-xs text-purple-700">
+              El boletín tiene páginas con imágenes o encoding roto.
+              La cola de Hermes las está procesando con visión multimodal.
+              Esta vista se actualiza automáticamente.
+            </p>
+            {boletin.entries_hermes_pending > 0 && (
+              <p className="text-xs text-purple-700">
+                {boletin.entries_hermes_pending} entradas pendientes de revisión visual.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
@@ -101,7 +162,7 @@ export default function BoletinDetail() {
         </Link>
       )}
 
-      {!isExtracting && (
+      {!isExtracting && !hermesActive && (
         <div className="border-t pt-6">
           <Button variant="destructive" onClick={handleDelete}>
             Eliminar boletín

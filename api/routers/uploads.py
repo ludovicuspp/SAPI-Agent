@@ -126,7 +126,7 @@ async def ws_progress(websocket: WebSocket, boletin_id: int) -> None:
     """WebSocket que envía eventos de progreso de un boletin_id."""
     await websocket.accept()
     cfg = get_settings()
-    last_status = None
+    last_signature = None
     try:
         while True:
             conn = db.connect(cfg.sapi_db_path)
@@ -135,18 +135,34 @@ async def ws_progress(websocket: WebSocket, boletin_id: int) -> None:
                 if b is None:
                     await websocket.send_json({"error": "not_found"})
                     break
-                if b.status != last_status:
+                signature = (
+                    b.status,
+                    b.progress_step,
+                    b.progress_current_page,
+                    b.progress_total_pages,
+                    b.pages,
+                    b.entries_matcheables,
+                    b.entries_figura,
+                    b.entries_lema,
+                    b.entries_hermes_pending,
+                )
+                if signature != last_signature:
                     await websocket.send_json({
                         "boletin_id": boletin_id,
                         "status": b.status,
                         "pages": b.pages,
+                        "progress_step": b.progress_step,
+                        "progress_current_page": b.progress_current_page,
+                        "progress_total_pages": b.progress_total_pages,
+                        "needs_hermes_review": bool(b.needs_hermes_review),
+                        "hermes_processed_at": b.hermes_processed_at,
                         "entries_matcheables": b.entries_matcheables,
                         "entries_figura": b.entries_figura,
                         "entries_lema": b.entries_lema,
                         "entries_hermes_pending": b.entries_hermes_pending,
                         "error": b.error,
                     })
-                    last_status = b.status
+                    last_signature = signature
                 if b.status in ("extracted", "failed"):
                     break
             finally:

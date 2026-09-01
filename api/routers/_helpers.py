@@ -8,6 +8,7 @@ from scripts import db
 from scripts.schemas import (
     BoletinOut,
     DetectionOut,
+    PortfolioHistoryOut,
     PortfolioOut,
     UserOut,
     WatchlistOut,
@@ -46,7 +47,38 @@ def portfolio_to_out(r: db.PortfolioRow) -> PortfolioOut:
         status=r.status,
         last_checked_at=_parse_dt(r.last_checked_at),
         notes=r.notes,
+        pais=r.pais,
+        etiqueta=r.etiqueta,
+        tipo_registro=r.tipo_registro,
+        bufete=r.bufete,
+        solicitud=r.solicitud,
+        fecha_solicitud=r.fecha_solicitud,
+        registro=r.registro,
+        fecha_registro=r.fecha_registro,
+        fecha_vencimiento=r.fecha_vencimiento,
+        titular=r.titular,
+        tramitante=r.tramitante,
+        empresa_licenciada=r.empresa_licenciada,
+        productos_servicios=r.productos_servicios,
+        comentarios=r.comentarios,
+        last_boletin_id=r.last_boletin_id,
+        last_boletin_period=r.last_boletin_period,
         created_at=r.created_at,
+        updated_at=_parse_dt(getattr(r, "updated_at", None)),
+    )
+
+
+def history_to_out(r: db.PortfolioHistoryRow) -> PortfolioHistoryOut:
+    return PortfolioHistoryOut(
+        id=r.id,
+        portfolio_id=r.portfolio_id,
+        user_id=r.user_id,
+        boletin_id=r.boletin_id,
+        boletin_period=r.boletin_period,
+        boletin_number=r.boletin_number,
+        estado=r.estado,
+        snapshot=r.snapshot,
+        created_at=_parse_dt(r.created_at),
     )
 
 
@@ -62,13 +94,17 @@ def boletin_to_out(r: db.BoletinRow) -> BoletinOut:
         pages=r.pages,
         status=r.status,
         needs_hermes_review=bool(r.needs_hermes_review),
-        uploaded_at=r.uploaded_at,
+        hermes_processed_at=_parse_dt(getattr(r, "hermes_processed_at", None)),
+        uploaded_at=_parse_dt(r.uploaded_at) or datetime.now(),
         processed_at=_parse_dt(r.processed_at),
         error=r.error,
         entries_matcheables=r.entries_matcheables,
         entries_hermes_pending=r.entries_hermes_pending,
         entries_figura=r.entries_figura,
         entries_lema=r.entries_lema,
+        progress_step=getattr(r, "progress_step", None),
+        progress_current_page=getattr(r, "progress_current_page", None),
+        progress_total_pages=getattr(r, "progress_total_pages", None),
     )
 
 

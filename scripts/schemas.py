@@ -79,12 +79,32 @@ class WatchlistOut(BaseModel):
 
 # ── portfolio ──────────────────────────────────────────────────
 
+PORTFOLIO_ESTADOS = Literal[
+    "Registrada", "Pendiente Resolución", "Desistida", "Abandonada", "Negada"
+]
+TIPOS_REGISTRO = Literal["Mixta", "Denominativa", "Grafica"]
+
 
 class PortfolioIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     expediente: Optional[str] = Field(default=None, max_length=100)
     class_nice: Optional[int] = Field(default=None, ge=1, le=45)
     notes: Optional[str] = None
+    pais: str = "Venezuela"
+    etiqueta: Optional[str] = None
+    tipo_registro: Optional[TIPOS_REGISTRO] = None
+    bufete: Optional[str] = Field(default=None, max_length=200)
+    solicitud: Optional[str] = Field(default=None, max_length=80)
+    fecha_solicitud: Optional[str] = Field(default=None, max_length=20)
+    registro: Optional[str] = Field(default=None, max_length=80)
+    fecha_registro: Optional[str] = Field(default=None, max_length=20)
+    fecha_vencimiento: Optional[str] = Field(default=None, max_length=20)
+    titular: Optional[str] = Field(default=None, max_length=300)
+    tramitante: Optional[str] = Field(default=None, max_length=300)
+    empresa_licenciada: Optional[str] = Field(default=None, max_length=300)
+    productos_servicios: Optional[str] = None
+    comentarios: Optional[str] = None
+    status: Optional[PORTFOLIO_ESTADOS] = None
 
 
 class PortfolioOut(BaseModel):
@@ -96,7 +116,42 @@ class PortfolioOut(BaseModel):
     status: Optional[str]
     last_checked_at: Optional[datetime]
     notes: Optional[str]
+    pais: Optional[str]
+    etiqueta: Optional[str]
+    tipo_registro: Optional[str]
+    bufete: Optional[str]
+    solicitud: Optional[str]
+    fecha_solicitud: Optional[str]
+    registro: Optional[str]
+    fecha_registro: Optional[str]
+    fecha_vencimiento: Optional[str]
+    titular: Optional[str]
+    tramitante: Optional[str]
+    empresa_licenciada: Optional[str]
+    productos_servicios: Optional[str]
+    comentarios: Optional[str]
+    last_boletin_id: Optional[int]
+    last_boletin_period: Optional[str]
     created_at: datetime
+    updated_at: Optional[datetime]
+
+
+class PortfolioHistoryOut(BaseModel):
+    id: int
+    portfolio_id: int
+    user_id: int
+    boletin_id: Optional[int]
+    boletin_period: Optional[str]
+    boletin_number: Optional[int]
+    estado: Optional[str]
+    snapshot: dict
+    created_at: datetime
+
+
+class PortfolioImportResult(BaseModel):
+    created: int
+    updated: int
+    errors: list[str] = []
 
 
 # ── boletines ──────────────────────────────────────────────────
@@ -119,6 +174,7 @@ class BoletinOut(BaseModel):
     pages: Optional[int]
     status: str
     needs_hermes_review: bool
+    hermes_processed_at: Optional[datetime] = None
     uploaded_at: datetime
     processed_at: Optional[datetime]
     error: Optional[str]
@@ -126,6 +182,9 @@ class BoletinOut(BaseModel):
     entries_hermes_pending: int = 0
     entries_figura: int = 0
     entries_lema: int = 0
+    progress_step: Optional[str] = None
+    progress_current_page: Optional[int] = None
+    progress_total_pages: Optional[int] = None
 
 
 # ── detections ─────────────────────────────────────────────────
