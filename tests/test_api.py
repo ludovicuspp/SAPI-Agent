@@ -211,9 +211,68 @@ def test_portfolio_add_and_list(client: TestClient, agent_token: str):
         "class_nice": 25,
     }, headers=_auth_header(agent_token))
     assert r.status_code == 201
+    assert r.json()["status"] == "Pendiente Resolución"
     r = client.get("/api/portfolio", headers=_auth_header(agent_token))
     assert r.status_code == 200
     assert len(r.json()) >= 1
+
+
+def test_portfolio_get_update(client: TestClient, agent_token: str):
+    r = client.post("/api/portfolio", json={"name": "ACME", "solicitud": "S9"},
+                    headers=_auth_header(agent_token))
+    pid = r.json()["id"]
+    r = client.get(f"/api/portfolio/{pid}", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    r = client.put(f"/api/portfolio/{pid}", json={
+        "name": "ACME", "solicitud": "S9", "titular": "TITULAR NUEVO",
+        "tipo_registro": "Denominativa", "bufete": "BUFETE X",
+    }, headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert r.json()["titular"] == "TITULAR NUEVO"
+
+
+def test_portfolio_template_download(client: TestClient, agent_token: str):
+    r = client.get("/api/portfolio/template", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert "marca" in r.text
+    assert r.headers["content-type"].startswith("text/csv")
+
+
+def test_portfolio_import_csv(client: TestClient, agent_token: str):
+    csv_bytes = (
+        "país;marca;clase;solicitud;titular\n"
+        "Venezuela;NUEVA IMPORTADA;9;2026-000555;TITULAR\n"
+    ).encode("utf-8")
+    r = client.post("/api/portfolio/import", files={"file": ("import.csv", csv_bytes, "text/csv")},
+                    headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert r.json()["created"] == 1
+    r = client.get("/api/portfolio", headers=_auth_header(agent_token))
+    assert any(p["name"] == "NUEVA IMPORTADA" for p in r.json())
+
+
+def test_portfolio_etiqueta_upload(client: TestClient, agent_token: str):
+    r = client.post("/api/portfolio", json={"name": "CON ETIQUETA"},
+                    headers=_auth_header(agent_token))
+    pid = r.json()["id"]
+    png = b"\x89PNG\r\n\x1a\nfiledatos"
+    r = client.post(f"/api/portfolio/{pid}/etiqueta", files={"file": ("e.png", png, "image/png")},
+                    headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert r.json()["etiqueta"].startswith("/uploads/etiquetas/")
+    # extensión no permitida
+    r = client.post(f"/api/portfolio/{pid}/etiqueta", files={"file": ("e.gif", b"GIF", "image/gif")},
+                    headers=_auth_header(agent_token))
+    assert r.status_code == 400
+
+
+def test_portfolio_history_endpoint(client: TestClient, agent_token: str):
+    r = client.post("/api/portfolio", json={"name": "HISTORIAL", "solicitud": "S10"},
+                    headers=_auth_header(agent_token))
+    pid = r.json()["id"]
+    r = client.get(f"/api/portfolio/{pid}/history", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert r.json() == []
 
 
 # ── Boletines ────────────────────────────────────────────────────
@@ -587,3 +646,32 @@ def test_delete_boletin_404(client: TestClient, agent_token: str):
 def test_delete_boletin_unauthenticated(client: TestClient):
     r = client.delete("/api/boletines/1")
     assert r.status_code in (401, 422)
+
+
+def test_delete_boletin_with_scans_log(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """Regresión: `scans_log.boletin_id` no tiene ON DELETE CASCADE en
+    el esquema heredado de prod, así que `boletines_delete` debe
+    limpiar `scans_log` antes de borrar el boletín para no violar FK.
+    """
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+    tmp_db.execute(
+        "INSERT INTO scans_log(kind, boletin_id, status) "
+        "VALUES ('extract', ?, 'ok')",
+        (bid,),
+    )
+    tmp_db.commit()
+
+    r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
+    assert r.status_code == 204
+
+    # scans_log limpio para este boletin_id
+    rows = tmp_db.execute(
+        "SELECT COUNT(*) FROM scans_log WHERE boletin_id = ?", (bid,),
+    ).fetchone()[0]
+    assert rows == 0

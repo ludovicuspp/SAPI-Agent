@@ -49,10 +49,44 @@ CREATE TABLE IF NOT EXISTS portfolio (
     status TEXT,
     last_checked_at TEXT,
     notes TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    pais TEXT NOT NULL DEFAULT 'Venezuela',
+    etiqueta TEXT,
+    tipo_registro TEXT,
+    bufete TEXT,
+    solicitud TEXT,
+    fecha_solicitud TEXT,
+    registro TEXT,
+    fecha_registro TEXT,
+    fecha_vencimiento TEXT,
+    titular TEXT,
+    tramitante TEXT,
+    empresa_licenciada TEXT,
+    productos_servicios TEXT,
+    comentarios TEXT,
+    last_boletin_id INTEGER REFERENCES boletines(id),
+    last_boletin_period TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_portfolio_user ON portfolio(user_id);
 CREATE INDEX IF NOT EXISTS idx_portfolio_expediente ON portfolio(expediente);
+CREATE INDEX IF NOT EXISTS idx_portfolio_registro ON portfolio(registro);
+CREATE INDEX IF NOT EXISTS idx_portfolio_solicitud ON portfolio(solicitud);
+
+CREATE TABLE IF NOT EXISTS portfolio_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    portfolio_id INTEGER NOT NULL REFERENCES portfolio(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    boletin_id INTEGER REFERENCES boletines(id) ON DELETE SET NULL,
+    boletin_period TEXT,
+    boletin_number INTEGER,
+    estado TEXT,
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_portfolio_history_portfolio ON portfolio_history(portfolio_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_history_dedupe
+    ON portfolio_history(portfolio_id, boletin_id) WHERE boletin_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS boletines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,6 +216,23 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("detections", "es_figura", "INTEGER NOT NULL DEFAULT 0"),
         ("detections", "es_lema", "INTEGER NOT NULL DEFAULT 0"),
         ("detections", "needs_hermes_reverify", "INTEGER NOT NULL DEFAULT 0"),
+        # Portfolio ampliado (módulo portfolio: 17 campos + historial).
+        ("portfolio", "pais", "TEXT NOT NULL DEFAULT 'Venezuela'"),
+        ("portfolio", "etiqueta", "TEXT"),
+        ("portfolio", "tipo_registro", "TEXT"),
+        ("portfolio", "bufete", "TEXT"),
+        ("portfolio", "solicitud", "TEXT"),
+        ("portfolio", "fecha_solicitud", "TEXT"),
+        ("portfolio", "registro", "TEXT"),
+        ("portfolio", "fecha_registro", "TEXT"),
+        ("portfolio", "fecha_vencimiento", "TEXT"),
+        ("portfolio", "titular", "TEXT"),
+        ("portfolio", "tramitante", "TEXT"),
+        ("portfolio", "empresa_licenciada", "TEXT"),
+        ("portfolio", "productos_servicios", "TEXT"),
+        ("portfolio", "comentarios", "TEXT"),
+        ("portfolio", "last_boletin_id", "INTEGER"),
+        ("portfolio", "last_boletin_period", "TEXT"),
     ]
     for table, column, typedef in migrations:
         try:
@@ -191,6 +242,9 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             # La columna ya existe; ignorar.
             pass
+    # Índices por identidad (registro / solicitud) tras garantizar columnas.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_registro ON portfolio(registro)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_solicitud ON portfolio(solicitud)")
 
 
 @contextmanager
@@ -255,6 +309,13 @@ def users_list(conn: sqlite3.Connection) -> list[UserRow]:
 
 def users_count_admins(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin'").fetchone()
+    return int(row["c"])
+
+
+def users_count_active_admins(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM users WHERE role='admin' AND active=1"
+    ).fetchone()
     return int(row["c"])
 
 
@@ -324,11 +385,41 @@ class PortfolioRow:
     status: Optional[str]
     last_checked_at: Optional[str]
     notes: Optional[str]
-    created_at: str
+    pais: str = "Venezuela"
+    etiqueta: Optional[str] = None
+    tipo_registro: Optional[str] = None
+    bufete: Optional[str] = None
+    solicitud: Optional[str] = None
+    fecha_solicitud: Optional[str] = None
+    registro: Optional[str] = None
+    fecha_registro: Optional[str] = None
+    fecha_vencimiento: Optional[str] = None
+    titular: Optional[str] = None
+    tramitante: Optional[str] = None
+    empresa_licenciada: Optional[str] = None
+    productos_servicios: Optional[str] = None
+    comentarios: Optional[str] = None
+    last_boletin_id: Optional[int] = None
+    last_boletin_period: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
 
 
 def _portfolio_from_row(row: sqlite3.Row) -> PortfolioRow:
     return PortfolioRow(**dict(row))
+
+
+def _portfolio_ident_key(p: PortfolioRow) -> Optional[str]:
+    """Clave de identidad para upsert: #REGISTRO (registrada) o #SOLICITUD.
+
+    Una marca sin ni #registro ni #solicitud no se matchea contra el
+    boletín (queda sin verificación) según la regla de identidad.
+    """
+    if p.registro:
+        return f"registro:{p.registro.strip().upper()}"
+    if p.solicitud:
+        return f"solicitud:{p.solicitud.strip().upper()}"
+    return None
 
 
 def portfolio_add(
@@ -338,13 +429,86 @@ def portfolio_add(
     expediente: Optional[str] = None,
     class_nice: Optional[int] = None,
     notes: Optional[str] = None,
+    *,
+    pais: Optional[str] = "Venezuela",
+    etiqueta: Optional[str] = None,
+    tipo_registro: Optional[str] = None,
+    bufete: Optional[str] = None,
+    solicitud: Optional[str] = None,
+    fecha_solicitud: Optional[str] = None,
+    registro: Optional[str] = None,
+    fecha_registro: Optional[str] = None,
+    fecha_vencimiento: Optional[str] = None,
+    titular: Optional[str] = None,
+    tramitante: Optional[str] = None,
+    empresa_licenciada: Optional[str] = None,
+    productos_servicios: Optional[str] = None,
+    comentarios: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> int:
+    if status is None:
+        status = "Pendiente Resolución"
     cur = conn.execute(
-        "INSERT INTO portfolio(user_id, name, expediente, class_nice, notes)"
-        " VALUES (?,?,?,?,?)",
-        (user_id, name, expediente, class_nice, notes),
+        "INSERT INTO portfolio("
+        " user_id, name, expediente, class_nice, notes,"
+        " pais, etiqueta, tipo_registro, bufete,"
+        " solicitud, fecha_solicitud, registro, fecha_registro,"
+        " fecha_vencimiento, titular, tramitante, empresa_licenciada,"
+        " productos_servicios, comentarios, status)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            user_id, name, expediente, class_nice, notes,
+            pais, etiqueta, tipo_registro, bufete,
+            solicitud, fecha_solicitud, registro, fecha_registro,
+            fecha_vencimiento, titular, tramitante, empresa_licenciada,
+            productos_servicios, comentarios, status,
+        ),
     )
     return cur.lastrowid
+
+
+def portfolio_update(
+    conn: sqlite3.Connection,
+    portfolio_id: int,
+    user_id: int,
+    **fields: Any,
+) -> None:
+    """Actualiza una marca del portfolio (multi-tenant: exige user_id).
+
+    Solo actualiza las columnas pasadas como kwargs. Marca ``updated_at``.
+    """
+    allowed = {
+        "name", "expediente", "class_nice", "notes", "status",
+        "pais", "etiqueta", "tipo_registro", "bufete",
+        "solicitud", "fecha_solicitud", "registro", "fecha_registro",
+        "fecha_vencimiento", "titular", "tramitante", "empresa_licenciada",
+        "productos_servicios", "comentarios",
+        "last_checked_at", "last_boletin_id", "last_boletin_period",
+    }
+    cols = [k for k in fields if k in allowed]
+    if not cols:
+        return
+    set_clause = ", ".join(f"{c} = ?" for c in cols)
+    conn.execute(
+        f"UPDATE portfolio SET {set_clause}, updated_at = datetime('now')"
+        " WHERE id = ? AND user_id = ?",
+        (*[fields[c] for c in cols], portfolio_id, user_id),
+    )
+
+
+def portfolio_get(
+    conn: sqlite3.Connection, portfolio_id: int, user_id: Optional[int] = None
+) -> Optional[PortfolioRow]:
+    if user_id is None:
+        row = conn.execute(
+            "SELECT * FROM portfolio WHERE id = ?", (portfolio_id,)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM portfolio WHERE id = ? AND user_id = ?",
+            (portfolio_id, user_id),
+        ).fetchone()
+    return _portfolio_from_row(row) if row else None
 
 
 def portfolio_list_for_user(
@@ -358,17 +522,110 @@ def portfolio_list_for_user(
     ]
 
 
+def portfolio_find_by_identity(
+    conn: sqlite3.Connection, user_id: int, *, registro: Optional[str] = None,
+    solicitud: Optional[str] = None, expediente: Optional[str] = None,
+) -> Optional[PortfolioRow]:
+    """Devuelve la marca del usuario identificada por #REGISTRO / #SOLICITUD.
+
+    Prioridad de identidad (regla del módulo portfolio):
+    registrada → #REGISTRO; por registrar → #SOLICITUD; fallback
+    retrocompatible → expediente.
+    """
+    for value, col in ((registro, "registro"), (solicitud, "solicitud"), (expediente, "expediente")):
+        if not value or not str(value).strip():
+            continue
+        row = conn.execute(
+            f"SELECT * FROM portfolio WHERE user_id = ? AND TRIM(UPPER({col})) = ?",
+            (user_id, str(value).strip().upper()),
+        ).fetchone()
+        if row:
+            return _portfolio_from_row(row)
+    return None
+
+
 def portfolio_update_status(
     conn: sqlite3.Connection,
     portfolio_id: int,
     status: str,
     user_id: int,
+    *,
+    boletin_id: Optional[int] = None,
+    boletin_period: Optional[str] = None,
 ) -> None:
     conn.execute(
-        "UPDATE portfolio SET status = ?, last_checked_at = datetime('now')"
+        "UPDATE portfolio SET status = ?, last_checked_at = datetime('now'),"
+        " last_boletin_id = COALESCE(?, last_boletin_id),"
+        " last_boletin_period = COALESCE(?, last_boletin_period),"
+        " updated_at = datetime('now')"
         " WHERE id = ? AND user_id = ?",
-        (status, portfolio_id, user_id),
+        (status, boletin_id, boletin_period, portfolio_id, user_id),
     )
+
+
+# ── portfolio_history ──────────────────────────────────────────
+
+
+@dataclass
+class PortfolioHistoryRow:
+    id: int
+    portfolio_id: int
+    user_id: int
+    boletin_id: Optional[int]
+    boletin_period: Optional[str]
+    boletin_number: Optional[int]
+    estado: Optional[str]
+    snapshot_json: str
+    created_at: str
+
+    @property
+    def snapshot(self) -> dict[str, Any]:
+        try:
+            return json.loads(self.snapshot_json or "{}")
+        except (ValueError, TypeError):
+            return {}
+
+
+def _history_from_row(row: sqlite3.Row) -> PortfolioHistoryRow:
+    return PortfolioHistoryRow(**dict(row))
+
+
+def portfolio_history_add(
+    conn: sqlite3.Connection,
+    *,
+    portfolio_id: int,
+    user_id: int,
+    boletin_id: Optional[int],
+    boletin_period: Optional[str],
+    boletin_number: Optional[int],
+    estado: Optional[str],
+    snapshot: dict[str, Any],
+) -> int:
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO portfolio_history("
+        " portfolio_id, user_id, boletin_id, boletin_period,"
+        " boletin_number, estado, snapshot_json)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (
+            portfolio_id, user_id, boletin_id, boletin_period,
+            boletin_number, estado,
+            json.dumps(snapshot, ensure_ascii=False, default=str),
+        ),
+    )
+    return cur.lastrowid
+
+
+def portfolio_history_list(
+    conn: sqlite3.Connection, portfolio_id: int, user_id: int
+) -> list[PortfolioHistoryRow]:
+    return [
+        _history_from_row(r)
+        for r in conn.execute(
+            "SELECT * FROM portfolio_history WHERE portfolio_id = ? AND user_id = ?"
+            " ORDER BY id DESC",
+            (portfolio_id, user_id),
+        )
+    ]
 
 
 # ── boletines ───────────────────────────────────────────────────
@@ -487,7 +744,14 @@ def boletines_count_with_sha(conn: sqlite3.Connection, file_sha256: str) -> int:
 
 
 def boletines_delete(conn: sqlite3.Connection, boletin_id: int) -> None:
-    """Elimina la fila del boletín; las `detections` caen por CASCADE."""
+    """Elimina la fila del boletín y sus dependencias.
+
+    Las `detections` caen por CASCADE del FK. `scans_log` también
+    referencia `boletines.id` pero sin CASCADE (esquema heredado), así
+    que se borra explícitamente antes para no violar FK en bases
+    creadas con la versión antigua del esquema.
+    """
+    conn.execute("DELETE FROM scans_log WHERE boletin_id = ?", (boletin_id,))
     conn.execute("DELETE FROM boletines WHERE id = ?", (boletin_id,))
 
 
