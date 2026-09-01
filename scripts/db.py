@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS boletines (
     entries_lema INTEGER NOT NULL DEFAULT 0,
     progress_step TEXT,
     progress_current_page INTEGER,
-    progress_total_pages INTEGER
+    progress_total_pages INTEGER,
+    progress_updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_boletines_status ON boletines(status);
 CREATE INDEX IF NOT EXISTS idx_boletines_needs_hermes
@@ -220,6 +221,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("boletines", "progress_step", "TEXT"),
         ("boletines", "progress_current_page", "INTEGER"),
         ("boletines", "progress_total_pages", "INTEGER"),
+        ("boletines", "progress_updated_at", "TEXT"),
         ("detections", "pais", "TEXT"),
         ("detections", "fecha_inscripcion", "TEXT"),
         ("detections", "fuente_parsing", "TEXT"),
@@ -674,6 +676,7 @@ class BoletinRow:
     progress_step: Optional[str] = None
     progress_current_page: Optional[int] = None
     progress_total_pages: Optional[int] = None
+    progress_updated_at: Optional[str] = None
 
 
 def _boletin_from_row(row: sqlite3.Row) -> BoletinRow:
@@ -757,8 +760,10 @@ def boletines_update_progress(
     """Actualiza el progreso visible del boletín (status='extracting').
 
     Los parámetros ``None`` no se tocan; pasar un valor lo actualiza.
+    Siempre escribe ``progress_updated_at = datetime('now')`` para que
+    el sweep de huérfanos tenga una señal temporal fiable.
     """
-    sets: list[str] = []
+    sets: list[str] = ["progress_updated_at = datetime('now')"]
     params: list = []
     if step is not None:
         sets.append("progress_step = ?")
@@ -769,8 +774,6 @@ def boletines_update_progress(
     if total_pages is not None:
         sets.append("progress_total_pages = ?")
         params.append(total_pages)
-    if not sets:
-        return
     params.append(boletin_id)
     conn.execute(
         f"UPDATE boletines SET {', '.join(sets)} WHERE id = ?",
@@ -786,23 +789,31 @@ def boletines_mark_stale_extracting_as_failed(
     """Marca como ``failed`` los boletines en ``extracting`` con tareas
     huérfanas.
 
-    Una tarea se considera huérfana cuando:
-      - lleva más de ``threshold_minutes`` en ``extracting``
-      - y ``progress_step`` sigue ``NULL`` (señal de que el background
-        task nunca escribió progreso: murió antes de empezar o nunca
-        arrancó)
+    Detecta dos casos:
+      1. ``progress_step IS NULL`` y ``uploaded_at > N min``: tarea que
+         murió antes de empezar a reportar progreso (crash de import,
+         OOM al cargar el PDF, etc.).
+      2. ``progress_step`` no terminal y ``progress_updated_at > N min``:
+         tarea que reportó progreso pero quedó atascada a mitad
+         (kill -9 del servicio, SIGKILL del proceso, etc.).
 
     Esta función la invoca ``_process_boletin_task`` al arrancar (antes
     de empezar la suya) para limpiar el estado de runs anteriores que
-    murieron silenciosamente (OOM, SIGKILL, crash de import, etc.).
+    murieron silenciosamente.
 
     Devuelve la lista de boletines marcados.
     """
     rows = conn.execute(
-        "SELECT id, filename, uploaded_at FROM boletines "
-        " WHERE status = 'extracting' AND progress_step IS NULL "
-        "   AND datetime(uploaded_at) < datetime('now', ?)",
-        (f"-{threshold_minutes} minutes",),
+        "SELECT id, filename FROM boletines "
+        " WHERE status = 'extracting'"
+        "   AND ("
+        "        (progress_step IS NULL"
+        "           AND datetime(uploaded_at) < datetime('now', ?))"
+        "        OR (progress_updated_at IS NOT NULL"
+        "           AND progress_step NOT IN ('done', 'failed')"
+        "           AND datetime(progress_updated_at) < datetime('now', ?))"
+        "   )",
+        (f"-{threshold_minutes} minutes", f"-{threshold_minutes} minutes"),
     ).fetchall()
     if not rows:
         return []
@@ -820,7 +831,10 @@ def boletines_mark_stale_extracting_as_failed(
             kind="extract",
             status="error",
             boletin_id=r[0],
-            detail=f"Tarea huérfana (uploaded_at={r[1]}); marcada failed automáticamente.",
+            detail=(
+                f"Tarea huérfana (filename={r[1]}); marcada failed "
+                f"automáticamente tras >{threshold_minutes} min sin progreso."
+            ),
         )
     return ids
 

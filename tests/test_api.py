@@ -680,71 +680,87 @@ def test_delete_boletin_with_scans_log(
 def test_mark_stale_extracting_as_failed(
     tmp_db: sqlite3.Connection, tmp_path: Path, agent_user: db.UserRow,
 ):
-    """Boletines en extracting > N min sin progress_step se marcan failed."""
-    import time as _time
+    """Boletines en extracting con tareas huérfanas se marcan failed.
 
-    # Boletin "huérfano" antiguo: status=extracting, progress_step=NULL,
-    # uploaded_at hace 30 minutos.
-    orphan_id, _ = _make_extracted_boletin(
-        tmp_db, tmp_path, agent_user.id,
-        status="extracting",
+    Dos casos:
+      - progress_step NULL + uploaded_at > N min → tarea murió antes
+        de empezar.
+      - progress_step no terminal + progress_updated_at > N min →
+        tarea quedó atascada a mitad (caso BPI_655_V3).
+    """
+    # Huérfano de tipo 1: nunca reportó progreso, subido hace 30 min.
+    orphan_never_started, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id, status="extracting",
     )
     tmp_db.execute(
         "UPDATE boletines SET progress_step=NULL, progress_current_page=NULL, "
-        "progress_total_pages=NULL, uploaded_at=datetime('now', '-30 minutes') "
-        "WHERE id=?",
-        (orphan_id,),
+        "progress_total_pages=NULL, progress_updated_at=NULL, "
+        "uploaded_at=datetime('now', '-30 minutes') WHERE id=?",
+        (orphan_never_started,),
     )
-    # Boletin "vivo" reciente (10 seg): no debe tocarse.
-    fresh_id, _ = _make_extracted_boletin(
-        tmp_db, tmp_path, agent_user.id,
-        status="extracting",
+
+    # Huérfano de tipo 2: estaba extrayendo, última actualización hace 30 min.
+    orphan_stuck, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id, status="extracting",
+    )
+    tmp_db.execute(
+        "UPDATE boletines SET progress_step='extracting_text', "
+        "progress_current_page=680, progress_total_pages=2580, "
+        "progress_updated_at=datetime('now', '-30 minutes') WHERE id=?",
+        (orphan_stuck,),
+    )
+
+    # Boletin "vivo" reciente: no debe tocarse.
+    fresh, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id, status="extracting",
     )
     tmp_db.execute(
         "UPDATE boletines SET progress_step=NULL, "
         "progress_current_page=NULL, progress_total_pages=NULL, "
-        "uploaded_at=datetime('now', '-10 seconds') WHERE id=?",
-        (fresh_id,),
+        "progress_updated_at=NULL, "
+        "uploaded_at=datetime('now', '-5 seconds') WHERE id=?",
+        (fresh,),
     )
-    # Boletin "vivo" con progress_step actualizado: no debe tocarse.
-    updated_id, _ = _make_extracted_boletin(
-        tmp_db, tmp_path, agent_user.id,
-        status="extracting",
+
+    # Boletin "vivo" con progreso reciente: no debe tocarse.
+    updated, _ = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id, status="extracting",
     )
     tmp_db.execute(
         "UPDATE boletines SET progress_step='extracting_text', "
         "progress_current_page=10, progress_total_pages=100, "
-        "uploaded_at=datetime('now', '-30 minutes') WHERE id=?",
-        (updated_id,),
+        "progress_updated_at=datetime('now', '-5 seconds') WHERE id=?",
+        (updated,),
     )
     tmp_db.commit()
 
     marked = db.boletines_mark_stale_extracting_as_failed(
         tmp_db, threshold_minutes=10,
     )
-    assert marked == [orphan_id]
 
-    orphan = db.boletines_get(tmp_db, orphan_id)
-    assert orphan is not None
-    assert orphan.status == "failed"
-    assert orphan.progress_step == "failed"
-    assert "huérfana" in (orphan.error or "").lower()
+    # Ambos huérfanos (tipo 1 y tipo 2) deben marcarse.
+    assert sorted(marked) == sorted([orphan_never_started, orphan_stuck])
 
-    fresh = db.boletines_get(tmp_db, fresh_id)
-    assert fresh is not None
-    assert fresh.status == "extracting"
-    assert fresh.progress_step is None
+    # Los huérfanos quedan en failed con mensaje.
+    for bid in (orphan_never_started, orphan_stuck):
+        b = db.boletines_get(tmp_db, bid)
+        assert b.status == "failed"
+        assert b.progress_step == "failed"
+        assert "huérfana" in (b.error or "").lower()
 
-    updated = db.boletines_get(tmp_db, updated_id)
-    assert updated is not None
-    assert updated.status == "extracting"
-    assert updated.progress_step == "extracting_text"
+    # El fresco y el actualizado no se tocan.
+    for bid in (fresh, updated):
+        b = db.boletines_get(tmp_db, bid)
+        assert b.status == "extracting"
+        if bid == fresh:
+            assert b.progress_step is None
+        else:
+            assert b.progress_step == "extracting_text"
 
-    # scans_log tiene una entrada de error para el huérfano
-    err = tmp_db.execute(
-        "SELECT status, detail FROM scans_log WHERE boletin_id=?",
-        (orphan_id,),
-    ).fetchone()
-    assert err is not None
-    assert err[0] == "error"
-    assert "huérf" in (err[1] or "").lower()
+    # scans_log tiene entradas de error para los huérfanos.
+    err_rows = tmp_db.execute(
+        "SELECT boletin_id, status FROM scans_log "
+        " WHERE boletin_id IN (?, ?) AND status='error'",
+        (orphan_never_started, orphan_stuck),
+    ).fetchall()
+    assert len(err_rows) == 2
