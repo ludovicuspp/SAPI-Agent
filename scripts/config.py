@@ -53,6 +53,11 @@ class Settings(BaseSettings):
 
     max_upload_mb: int = 300
 
+    # Extracción por lotes: páginas por lote. PDFs masivos (1000+ páginas)
+    # se procesan en lotes y se libera memoria entre cada uno para evitar
+    # OOM. El checkpoint permite reanudar tras un fallo.
+    pdf_batch_size: int = 50
+
     hermes_api_url: str = "http://localhost:8000"
     service_token_hermes: str = ""
 

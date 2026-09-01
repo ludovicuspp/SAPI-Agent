@@ -114,7 +114,9 @@ CREATE TABLE IF NOT EXISTS boletines (
     progress_step TEXT,
     progress_current_page INTEGER,
     progress_total_pages INTEGER,
-    progress_updated_at TEXT
+    progress_updated_at TEXT,
+    checkpoint_json TEXT,
+    processing_batch INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_boletines_status ON boletines(status);
 CREATE INDEX IF NOT EXISTS idx_boletines_needs_hermes
@@ -222,6 +224,8 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("boletines", "progress_current_page", "INTEGER"),
         ("boletines", "progress_total_pages", "INTEGER"),
         ("boletines", "progress_updated_at", "TEXT"),
+        ("boletines", "checkpoint_json", "TEXT"),
+        ("boletines", "processing_batch", "INTEGER"),
         ("detections", "pais", "TEXT"),
         ("detections", "fecha_inscripcion", "TEXT"),
         ("detections", "fuente_parsing", "TEXT"),
@@ -677,6 +681,8 @@ class BoletinRow:
     progress_current_page: Optional[int] = None
     progress_total_pages: Optional[int] = None
     progress_updated_at: Optional[str] = None
+    checkpoint_json: Optional[str] = None
+    processing_batch: Optional[int] = None
 
 
 def _boletin_from_row(row: sqlite3.Row) -> BoletinRow:
@@ -723,6 +729,8 @@ def boletines_mark_extracted(
         " entries_hermes_pending = ?,"
         " entries_figura = ?,"
         " entries_lema = ?,"
+        " checkpoint_json = NULL,"
+        " processing_batch = NULL,"
         " processed_at = datetime('now')"
         " WHERE id = ?",
         (
@@ -779,6 +787,49 @@ def boletines_update_progress(
         f"UPDATE boletines SET {', '.join(sets)} WHERE id = ?",
         params,
     )
+
+
+def boletines_save_checkpoint(
+    conn: sqlite3.Connection,
+    boletin_id: int,
+    *,
+    batch: int,
+    checkpoints: dict[str, Any],
+) -> None:
+    """Persiste el checkpoint de extracción por lotes del boletín.
+
+    ``batch`` es el número de lote completado. ``checkpoints`` es un
+    dict JSON-serializable con flags agregados (has_images, low_conf,
+    cid_encoding, last_page, counts). Permite reanudar una extracción
+    interrumpida (OOM/SIGKILL) sin volver a procesar los lotes previos.
+    """
+    conn.execute(
+        "UPDATE boletines SET checkpoint_json = ?, processing_batch = ? WHERE id = ?",
+        (json.dumps(checkpoints, ensure_ascii=False, default=str), batch, boletin_id),
+    )
+
+
+def boletines_get_checkpoint(
+    conn: sqlite3.Connection, boletin_id: int
+) -> tuple[Optional[int], dict[str, Any]]:
+    """Devuelve ``(batch, checkpoints)`` actuales del boletín.
+
+    Si el boletín no tiene checkpoint, ``batch`` es ``None`` y
+    ``checkpoints`` es ``{}``.
+    """
+    row = conn.execute(
+        "SELECT checkpoint_json, processing_batch FROM boletines WHERE id = ?",
+        (boletin_id,),
+    ).fetchone()
+    if not row:
+        return None, {}
+    try:
+        ck = json.loads(row["checkpoint_json"]) if row["checkpoint_json"] else {}
+    except (ValueError, TypeError):
+        ck = {}
+    if not isinstance(ck, dict):
+        ck = {}
+    return row["processing_batch"], ck
 
 
 def boletines_mark_stale_extracting_as_failed(

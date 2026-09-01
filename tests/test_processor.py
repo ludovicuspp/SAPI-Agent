@@ -129,6 +129,63 @@ class TestProcessor:
                 notify=False,
             )
 
+    def test_batch_extract_resumes_after_partial_checkpoint(self, tmp_db, tmp_path):
+        """Un checkpoint parcial + JSONL permite reanudar sin duplicar."""
+        from scripts.config import Settings
+        from scripts.extractors import pdf_meta
+        from scripts.extractors.pdf_batch import extract_pdf_in_batches
+        import json
+
+        fixture_pdf = Path("tests/fixtures/sample_boletin.pdf")
+        if not fixture_pdf.exists():
+            pytest.skip(f"No existe fixture: {fixture_pdf}")
+
+        uid = db.users_create(tmp_db, "u@x.y", "h")
+        bid = db.boletines_create(
+            tmp_db, uid, "sample.pdf", str(fixture_pdf), "abc"
+        )
+        total = pdf_meta.count_pages(fixture_pdf)
+
+        cfg = Settings(
+            data_dir=tmp_path,
+            uploads_dir=tmp_path / "uploads",
+        )
+        checkpoint = (
+            Path(cfg.data_dir) / "checkpoints" / f"boletin_{bid}.jsonl"
+        )
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+
+        # Simular que ya se extrajo la primera página en un run anterior.
+        extracted = extract_pdf_in_batches(fixture_pdf, batch_size=1)
+        first = extracted.pages[0]
+        with checkpoint.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "page_number": first.page_number,
+                "text": first.text,
+                "char_count": first.char_count,
+                "has_images": first.has_images,
+                "low_confidence": first.low_confidence,
+            }, ensure_ascii=False) + "\n")
+        db.boletines_save_checkpoint(
+            tmp_db, bid, batch=1, checkpoints={"last_page": 1}
+        )
+
+        result = processor.process_pdf(
+            fixture_pdf,
+            user_id=uid,
+            conn=tmp_db,
+            notify=False,
+            boletin_id=bid,
+            settings=cfg,
+        )
+        assert result.pages_extracted == total
+        b = db.boletines_get(tmp_db, bid)
+        assert b.status == "extracted"
+        payload = json.loads(b.extraction_json)
+        page_numbers = [p["page_number"] for p in payload["pages"]]
+        # Sin duplicados y completo.
+        assert len(page_numbers) == len(set(page_numbers)) == total
+
 
 class TestNotifierMocked:
     def test_send_when_smtp_configured(self, tmp_db, monkeypatch):

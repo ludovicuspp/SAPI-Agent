@@ -154,6 +154,7 @@ async def ws_progress(websocket: WebSocket, boletin_id: int) -> None:
                     b.entries_figura,
                     b.entries_lema,
                     b.entries_hermes_pending,
+                    b.processing_batch,
                 )
                 if signature != last_signature:
                     await websocket.send_json({
@@ -163,6 +164,7 @@ async def ws_progress(websocket: WebSocket, boletin_id: int) -> None:
                         "progress_step": b.progress_step,
                         "progress_current_page": b.progress_current_page,
                         "progress_total_pages": b.progress_total_pages,
+                        "processing_batch": b.processing_batch,
                         "needs_hermes_review": bool(b.needs_hermes_review),
                         "hermes_processed_at": b.hermes_processed_at,
                         "entries_matcheables": b.entries_matcheables,

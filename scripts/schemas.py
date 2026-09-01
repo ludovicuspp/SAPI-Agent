@@ -185,6 +185,7 @@ class BoletinOut(BaseModel):
     progress_step: Optional[str] = None
     progress_current_page: Optional[int] = None
     progress_total_pages: Optional[int] = None
+    processing_batch: Optional[int] = None
 
 
 # ── detections ─────────────────────────────────────────────────

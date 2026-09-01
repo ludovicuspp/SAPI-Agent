@@ -105,6 +105,7 @@ def boletin_to_out(r: db.BoletinRow) -> BoletinOut:
         progress_step=getattr(r, "progress_step", None),
         progress_current_page=getattr(r, "progress_current_page", None),
         progress_total_pages=getattr(r, "progress_total_pages", None),
+        processing_batch=getattr(r, "processing_batch", None),
     )
 
 

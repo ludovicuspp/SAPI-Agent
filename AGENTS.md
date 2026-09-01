@@ -169,6 +169,7 @@ suele ser cap del proxy, no del backend.
 - No escribir SQLite desde Hermes; siempre el POST `structured`.
 - No añadir deps fuera de `requirements.txt` /
   `requirements-dev.txt` / `dashboard/package.json` sin pedirlo.
-- No commitear `.env`, `data/sapi.db*`, ni PDFs en `data/uploads/`.
+- No commitear `.env`, `data/sapi.db*`, PDFs en `data/uploads/`, ni
+  `data/checkpoints/` (checkpoints de extracción por lotes).
 - No crear skills Hermes extra ni tooling Python de lint/format
   sin preguntar.

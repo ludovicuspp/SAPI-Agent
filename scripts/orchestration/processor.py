@@ -2,8 +2,11 @@
 
 Responsabilidades:
 - Calcular hash del PDF, crear fila en ``boletines``.
-- Extraer texto con pdfplumber (``scripts.extractors.pdf_text``), con
-  fallback a pymupdf si detecta encoding cid: corrupto.
+- Extraer texto por lotes (``scripts.extractors.pdf_batch``) con
+  PyMuPDF y memoria acotada; cada lote se libera para evitar OOM en
+  boletines de 1000+ páginas.
+- Persistir un checkpoint por lotes (DB + JSONL en disco) para poder
+  reanudar una extracción interrumpida sin reprocesar los lotes previos.
 - Auto-detectar metadatos del boletín (``parsers.boletin_header``).
 - Parsear entradas de marcas con el parser multi-formato
   (``parsers.marca_entry.MarcaEntryParser``).
@@ -32,6 +35,7 @@ from scripts.db import (
     boletines_get,
     boletines_mark_extracted,
     boletines_mark_failed,
+    boletines_save_checkpoint,
     boletines_update_progress,
     detections_add,
     detections_mark_notified,
@@ -39,7 +43,7 @@ from scripts.db import (
     scans_log_record,
     watchlist_list_for_user,
 )
-from scripts.extractors import pdf_meta, pdf_text
+from scripts.extractors import pdf_meta, pdf_batch
 from scripts.matcher import combined
 from scripts.notifiers import email_smtp
 from scripts.orchestration.portfolio_sync import verify_entries_for_user
@@ -71,7 +75,45 @@ class ProcessResult:
     duration_ms: int
 
 
-# ── Concatenación del texto para parsers ───────────────────────
+# ── Checkpoint JSONL en disco ──────────────────────────────────
+
+
+def _checkpoint_path(data_dir: Path, boletin_id: int) -> Path:
+    """Ruta del JSONL que guarda las páginas ya extraídas.
+
+    Una línea por página: ``{page_number, text, char_count,
+    has_images, low_confidence}``. Se escribe de forma incremental y
+    se lee al final para construir el texto del parser sin retener
+    todo el PDF en RAM.
+    """
+    return data_dir / "checkpoints" / f"boletin_{boletin_id}.jsonl"
+
+
+def _write_page_append(checkpoint: Path, page: dict) -> None:
+    import json as _json
+
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    with checkpoint.open("a", encoding="utf-8") as fh:
+        fh.write(_json.dumps(page, ensure_ascii=False) + "\n")
+
+
+def _load_checkpoint_pages(checkpoint: Path) -> list[dict]:
+    """Lee todas las líneas del checkpoint (páginas ya extraídas)."""
+    import json as _json
+
+    if not checkpoint.exists():
+        return []
+    pages: list[dict] = []
+    with checkpoint.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pages.append(_json.loads(line))
+            except ValueError:
+                continue
+    return pages
 
 
 def _build_parser_text(pages: list) -> str:
@@ -80,8 +122,8 @@ def _build_parser_text(pages: list) -> str:
     """
     parts = []
     for p in pages:
-        parts.append(f"--- página {p.page_number} ---")
-        parts.append(p.text)
+        parts.append(f"--- página {p['page_number']} ---")
+        parts.append(p["text"])
     return "\n".join(parts)
 
 
@@ -109,6 +151,7 @@ def process_pdf(
     """
     cfg = settings or get_settings()
     start = time.monotonic()
+    batch_size = max(1, int(cfg.pdf_batch_size))
 
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -125,6 +168,8 @@ def process_pdf(
             file_path=str(pdf_path),
             file_sha256=file_sha,
         )
+
+    checkpoint = _checkpoint_path(cfg.data_dir, boletin_id)
 
     def _report_progress(
         step: str,
@@ -145,19 +190,70 @@ def process_pdf(
 
         def _on_page(page_no: int, total: int) -> None:
             boletines_update_progress(
-                conn,
-                boletin_id,
-                current_page=page_no,
-                total_pages=total,
+                conn, boletin_id, current_page=page_no, total_pages=total
             )
             # commit por página: el WebSocket de progreso ve avance real.
             conn.commit()
 
-        extraction = pdf_text.extract(pdf_path, on_page=_on_page)
-        pages_total = pdf_meta.count_pages(pdf_path)
+        def _on_batch(pages, start_page: int, end_page: int) -> None:
+            # Persistir cada página al checkpoint y liberar el texto.
+            for pe in pages:
+                _write_page_append(
+                    checkpoint,
+                    {
+                        "page_number": pe.page_number,
+                        "text": pe.text,
+                        "char_count": pe.char_count,
+                        "has_images": pe.has_images,
+                        "low_confidence": pe.low_confidence,
+                    },
+                )
+            running["last_page"] = end_page
+            if any(p.has_images for p in pages):
+                running["has_images"] = True
+            if any(p.low_confidence for p in pages):
+                running["low_confidence"] = True
+            if any("(cid:" in (p.text or "") for p in pages):
+                running["cid_encoding"] = True
+            ck = dict(running)
+            boletines_save_checkpoint(conn, boletin_id, batch=end_page, checkpoints=ck)
+            conn.commit()
+
+        running: dict = {
+            "last_page": 0,
+            "has_images": False,
+            "low_confidence": False,
+            "cid_encoding": False,
+        }
+
+        # Reanudar si ya existe un checkpoint de un run anterior.
+        already_done = _load_checkpoint_pages(checkpoint)
+        resume_from = 0
+        if already_done:
+            resume_from = max(p["page_number"] for p in already_done)
+
+        # Extracción por lotes. Si hay checkpoints previos, las páginas
+        # ya extraídas están en disco; se continúa desde la siguiente.
+        extraction = pdf_batch.extract_pdf_in_batches_memory_efficient(
+            pdf_path,
+            batch_size=batch_size,
+            start_page=resume_from + 1,
+            on_page=_on_page,
+            on_batch=_on_batch,
+        )
+        pages_total = extraction.total_pages
+
+        # En modo memory_efficient no retenemos páginas; el texto queda
+        # en el checkpoint JSONL. Leerlo para construir parser_text.
+        parser_pages = _load_checkpoint_pages(checkpoint)
+        # Como el checkpoint se reanuda desde resume_from y pudo haber un
+        # lote fallido a mitad, garantizamos unicidad/orden por page_number.
+        parser_pages.sort(key=lambda p: p["page_number"])
+
         _report_progress("parsing_entries", current_page=pages_total, total_pages=pages_total)
 
-        parser_text = _build_parser_text(extraction.pages)
+        # Metadata: se detecta del texto ya extraído (header al inicio).
+        parser_text = _build_parser_text(parser_pages)
         metadata = boletin_header.detect(parser_text)
 
         # Parser multi-formato con lookup de página por posición.
@@ -179,19 +275,19 @@ def process_pdf(
         entries, stats = parser.parse_with_stats(parser_text)
 
         needs_hermes = any(
-            p.has_images or p.low_confidence for p in extraction.pages
+            p.get("has_images") or p.get("low_confidence") for p in parser_pages
         )
 
         extraction_payload = {
             "pages": [
                 {
-                    "page_number": p.page_number,
-                    "text": p.text,
-                    "char_count": p.char_count,
-                    "has_images": p.has_images,
-                    "low_confidence": p.low_confidence,
+                    "page_number": p["page_number"],
+                    "text": p["text"],
+                    "char_count": p["char_count"],
+                    "has_images": p["has_images"],
+                    "low_confidence": p["low_confidence"],
                 }
-                for p in extraction.pages
+                for p in parser_pages
             ],
             "metadata": {
                 "bulletin_number": metadata.bulletin_number,
@@ -333,6 +429,12 @@ def process_pdf(
             duration_ms=duration_ms,
         )
 
+        # Limpiar checkpoint en disco al terminar.
+        try:
+            checkpoint.unlink(missing_ok=True)
+        except OSError:
+            pass
+
         return ProcessResult(
             boletin_id=boletin_id,
             filename=filename,
@@ -340,7 +442,7 @@ def process_pdf(
             period=metadata.period,
             tomo=metadata.tomo,
             needs_hermes_review=needs_hermes,
-            pages_extracted=len(extraction.pages),
+            pages_extracted=len(parser_pages),
             pages_total=pages_total,
             entries_parsed=stats.total_inscripciones,
             entries_matcheables=stats.entries_matcheables,

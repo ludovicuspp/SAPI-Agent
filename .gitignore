@@ -31,6 +31,7 @@ data/sapi.db
 data/sapi.db-*
 data/uploads/*
 !data/uploads/.gitkeep
+data/checkpoints/*
 data/hermes_runs/*
 !data/hermes_runs/.gitkeep
 
