@@ -356,7 +356,7 @@ def process_pdf(
         # Solo entries matcheables participan en el matching.
         matcheable_entries = [e for e in entries if e.matcheable]
         candidate_names = [e.marca for e in matcheable_entries if e.marca]
-        candidate_classes = [e.clase for e in matcheable_entries if e.marca]
+        candidate_classes = [e.clase_niza for e in matcheable_entries if e.marca]
         watch_classes = [w.class_nice for w in watch]
         thresholds = combined.Thresholds.from_settings(
             cfg.match_threshold, cfg.fuzzy_threshold
