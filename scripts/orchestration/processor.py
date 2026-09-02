@@ -21,6 +21,7 @@ Responsabilidades:
 """
 from __future__ import annotations
 
+import re as _re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -76,8 +77,6 @@ class ProcessResult:
 
 
 # ── Checkpoint JSONL en disco ──────────────────────────────────
-
-
 def _checkpoint_path(data_dir: Path, boletin_id: int) -> Path:
     """Ruta del JSONL que guarda las páginas ya extraídas.
 
@@ -125,6 +124,46 @@ def _build_parser_text(pages: list) -> str:
         parts.append(f"--- página {p['page_number']} ---")
         parts.append(p["text"])
     return "\n".join(parts)
+
+
+def make_position_lookups(parser_text: str):
+    """Construye lookups página/sección O(log n) para el parser.
+
+    Precomputa una sola vez los offsets de los marcadores de página y de
+    las secciones sobre el texto completo. Devuelve ``(page_lookup,
+    section_lookup)``, funciones con la firma ``(text, position) -> v``
+    que el parser usa en ``_enrich``. Esto evita reescanear el texto por
+    cada entrada (O(n) por entrada → O(log n)), lo que colgaba el parsing
+    de boletines de 1800+ páginas.
+    """
+    import bisect as _bisect
+
+    page_re = _re.compile(r"--- página (\d+) ---")
+    page_items = [(m.start(), int(m.group(1))) for m in page_re.finditer(parser_text)]
+    page_items.sort()
+    page_starts = [o for o, _ in page_items]
+
+    sec_items = [
+        (m.start(), st)
+        for pat, st in boletin_header._SECCION_PATTERNS
+        for m in pat.finditer(parser_text)
+    ]
+    sec_items.sort(key=lambda x: x[0])
+    sec_starts = [o for o, _ in sec_items]
+
+    def page_lookup(text: str, position: int):
+        i = _bisect.bisect_right(page_starts, max(0, position)) - 1
+        if i < 0:
+            return None
+        return page_items[i][1]
+
+    def section_lookup(text: str, position: int):
+        j = _bisect.bisect_right(sec_starts, max(0, position)) - 1
+        if j < 0:
+            return None
+        return sec_items[j][1]
+
+    return page_lookup, section_lookup
 
 
 # ── Pipeline principal ─────────────────────────────────────────
@@ -256,18 +295,10 @@ def process_pdf(
         parser_text = _build_parser_text(parser_pages)
         metadata = boletin_header.detect(parser_text)
 
-        # Parser multi-formato con lookup de página por posición.
-        import re as _re
-
-        def page_lookup(text: str, position: int) -> Optional[int]:
-            page_re = _re.compile(r"--- página (\d+) ---")
-            last = None
-            for m in page_re.finditer(text[: max(0, position)]):
-                last = int(m.group(1))
-            return last
-
-        def section_lookup(text: str, position: int) -> Optional[str]:
-            return boletin_header.detect_current_section(text, position)
+        # Parser multi-formato. Precomputamos índices página y sección una
+        # sola vez (O(log n) por entrada en vez de O(n), que colgaba el
+        # parsing en boletines de 1800+ páginas).
+        page_lookup, section_lookup = make_position_lookups(parser_text)
 
         parser = MarcaEntryParser(
             page_lookup=page_lookup, section_lookup=section_lookup,

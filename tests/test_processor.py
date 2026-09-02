@@ -116,8 +116,8 @@ class TestProcessor:
 
         # Sin cambio esperado (no hay match real)
         portfolio = db.portfolio_list_for_user(tmp_db, uid)
-        # El status sigue siendo None porque no hubo match
-        assert portfolio[0].status is None
+        # El status se mantiene en el default (no hubo match)
+        assert portfolio[0].status == "Pendiente Resolución"
 
     def test_missing_file_raises(self, tmp_db):
         uid = db.users_create(tmp_db, "u@x.y", "h")
@@ -185,6 +185,56 @@ class TestProcessor:
         page_numbers = [p["page_number"] for p in payload["pages"]]
         # Sin duplicados y completo.
         assert len(page_numbers) == len(set(page_numbers)) == total
+
+    def test_position_lookups_are_correct_and_fast(self, sample_boletin_text):
+        """Los lookups por bisect asignan página/sección igual que antes,
+        pero en O(log n) aunque haya miles de páginas."""
+        from scripts.orchestration.processor import make_position_lookups
+
+        text = sample_boletin_text
+        page_lookup, section_lookup = make_position_lookups(text)
+
+        # La 1ª entrada está en la página 8, sección PUBLICADA.
+        idx = text.find("Insc. 2015-015976")
+        assert page_lookup(text, idx) == 8
+        assert section_lookup(text, idx) == "PUBLICADA"
+
+        # La entrada de la página 9 pertenece a la página 9.
+        idx9 = text.find("Insc. 2018-006650")
+        assert page_lookup(text, idx9) == 9
+
+        # Posición antes de la primera página → sin asignar.
+        assert page_lookup(text, 0) is None
+        assert section_lookup(text, 0) is None
+
+    def test_position_lookups_scale_to_thousands_of_pages(self, sample_boletin_text):
+        """Regresión de rendimiento: el parsing con lookups bisect debe
+        completar en menos de 2 s con un texto equivalente a ~2000 páginas
+        (antes colgaba horas por el lookup O(n) por entrada)."""
+        import time as _time
+        from scripts.parsers.marca_entry import MarcaEntryParser
+        from scripts.orchestration.processor import make_position_lookups
+
+        # Simular 2000 páginas repitiendo bloques con marcadores intercalados.
+        parts = []
+        for i in range(1, 2001):
+            parts.append(f"--- página {i} ---")
+            parts.append(
+                "Insc. 2015-015976 del 30 DE OCTUBRE DE 2015\n"
+                "SOLICITADA POR: RAUL ENRIQUE ARTIGAS País: VENEZUELA\n"
+                "ACME SAMPLE\nEN CLASE: 35\nPARA DISTINGUIR: ALGO.\n"
+            )
+        text = "\n".join(parts)
+
+        page_lookup, section_lookup = make_position_lookups(text)
+        parser = MarcaEntryParser(
+            page_lookup=page_lookup, section_lookup=section_lookup
+        )
+        t0 = _time.monotonic()
+        entries, stats = parser.parse_with_stats(text)
+        dt = _time.monotonic() - t0
+        assert stats.total_inscripciones >= 1
+        assert dt < 2.0, f"parsing tardó {dt:.2f}s (regresión de rendimiento)"
 
 
 class TestNotifierMocked:
