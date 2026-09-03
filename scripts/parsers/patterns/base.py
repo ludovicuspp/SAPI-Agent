@@ -34,9 +34,19 @@ SOLICITADA_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# `EN CLASE: NN` o `EN CLASE: LC` (lema comercial), con espacios flexibles.
+# `EN CLASE: NN`, `Clase NN`, o `EN CLASE: LC` (lema comercial), con
+# espacios flexibles. Algunas entradas del boletín escriben la clase
+# sin el prefijo "EN" (p.ej. "Clase 39") al final del bloque de
+# "PARA DISTINGUIR".
 CLASE_RE = re.compile(
-    r"EN\s+CLASE\s*:?\s*(?P<clase>\d{1,2}|LC)\b",
+    r"(?:EN\s+)?CLASE\s*:?\s*(?P<clase>\d{1,2}|LC)\b",
+    re.IGNORECASE,
+)
+
+# `PARA DISTINGUIR: <descripción>` (productos/servicios). Corta al primer
+# salto de línea y limpia ruido de maquetación.
+DISTINGUIR_RE = re.compile(
+    r"PARA\s+DISTINGUIR\s*:\s*(?P<distinguir>[^\n]+)",
     re.IGNORECASE,
 )
 

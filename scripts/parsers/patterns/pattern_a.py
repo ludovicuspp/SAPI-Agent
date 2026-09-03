@@ -26,10 +26,12 @@ from typing import Iterator
 from scripts.parsers.patterns.base import (
     CLASE_RE,
     DESCRIPCION_ETIQUETA_RE,
+    DISTINGUIR_RE,
     INSC_RE,
     PAIS_RE,
     SOLICITADA_RE,
     clean_marca,
+    clean_text,
     clean_titular,
     extract_brand_lines,
     normalize_fecha,
@@ -44,11 +46,13 @@ def _entry_from_block(expediente: str, fecha_raw: str, content: str) -> dict:
     titular_m = SOLICITADA_RE.search(content)
     clase_m = CLASE_RE.search(content)
     pais_m = PAIS_RE.search(content)
+    distinguir_m = DISTINGUIR_RE.search(content)
 
     titular = clean_titular(titular_m.group("titular")) if titular_m else None
     pais_raw = pais_m.group("pais") if pais_m else None
     pais = normalize_pais(pais_raw)
     clase_niza, clase_especial = parse_clase(clase_m.group("clase") if clase_m else None)
+    productos_servicios = clean_text(distinguir_m.group("distinguir")) if distinguir_m else None
 
     # Marca: líneas en MAYÚSCULAS entre País (o SOLICITADA POR) y EN CLASE.
     marca_lines = []
@@ -79,6 +83,7 @@ def _entry_from_block(expediente: str, fecha_raw: str, content: str) -> dict:
         "es_figura": es_figura,
         "matcheable": marca is not None,
         "excerpt": excerpt,
+        "productos_servicios": productos_servicios,
     }
 
 

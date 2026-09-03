@@ -107,6 +107,39 @@ def test_orq_structured_token_correcto(client, boletin_row):
     assert r.json()["status"] == "processed"
 
 
+def test_orq_structured_respects_watchlist_class_nice(
+    client, boletin_row, tmp_path: Path
+):
+    """Hermes no crea match si la clase Niza de la watchlist no coincide."""
+    db_file = tmp_path / "test.db"
+    conn = db.connect(db_file)
+    admin_id = conn.execute(
+        "SELECT id FROM users WHERE email='admin@test.local'"
+    ).fetchone()[0]
+    db.watchlist_add(conn, admin_id, "ACME", class_nice=25)
+    conn.commit()
+    conn.close()
+
+    payload = {
+        "boletin_id": boletin_row,
+        "entries": [{
+            "expediente": "2024-000002",
+            "marca": "ACME",
+            "clase_niza": 9,
+            "titular": "ACME HOLDINGS LLC",
+            "estatus": "PUBLICADA",
+        }],
+    }
+    r = client.post(
+        f"/api/boletines/{boletin_row}/structured",
+        json=payload,
+        headers={"X-Hermes-Token": "hermes-test-token"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["entries_added"] == 0
+
+
 # ── B1.2: token vacío -> 503 (SERVICE_TOKEN_HERMES no configurado)
 
 

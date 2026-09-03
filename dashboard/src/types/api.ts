@@ -1,8 +1,16 @@
+export type UserRole = "admin" | "propietario" | "empresa" | "agent";
+
+export interface UserAction {
+  accion: string;
+  timestamp: string;
+}
+
 export interface User {
   id: number;
   email: string;
-  role: "admin" | "agent";
-  active: boolean;
+  role: UserRole;
+  nombre: string;
+  acciones: UserAction[];
   created_at: string;
 }
 
@@ -12,6 +20,7 @@ export interface Watchlist {
   name: string;
   class_nice: number | null;
   notes: string | null;
+  productos_servicios: string | null;
   active: boolean;
   created_at: string;
 }
@@ -72,7 +81,8 @@ export type BoletinStatus =
 
 export interface Boletin {
   id: number;
-  uploaded_by: number;
+  uploaded_by: number | null;
+  uploaded_by_name?: string | null;
   filename: string;
   file_path: string;
   file_sha256: string;
@@ -92,6 +102,10 @@ export interface Boletin {
   progress_step: string | null;
   progress_current_page: number | null;
   progress_total_pages: number | null;
+  hermes_progress_step: string | null;
+  hermes_progress_current_page: number | null;
+  hermes_progress_total_pages: number | null;
+  hermes_progress_updated_at: string | null;
 }
 
 export type MatchKind = "similar" | "own_status";
@@ -114,6 +128,7 @@ export interface Detection {
   source: Source;
   confidence: Confidence;
   raw_excerpt: string | null;
+  matched_with: string | null;
   detected_at: string;
   notified_email: boolean;
   pais: string | null;
@@ -147,4 +162,29 @@ export interface BoletinProgress {
   entries_lema: number;
   entries_hermes_pending: number;
   error: string | null;
+  hermes_progress_step: string | null;
+  hermes_progress_current_page: number | null;
+  hermes_progress_total_pages: number | null;
+  hermes_progress_updated_at: string | null;
+}
+
+export interface BoletinEntry {
+  id: number;
+  boletin_id: number;
+  expediente: string;
+  marca: string | null;
+  class_nice: number | null;
+  clase_especial: string | null;
+  titular: string | null;
+  pais: string | null;
+  fecha_inscripcion: string | null;
+  estatus: string | null;
+  page: number | null;
+  is_matcheable: boolean;
+  is_figura: boolean;
+  is_lema: boolean;
+  productos_servicios: string | null;
+  fuente_parsing: string | null;
+  source: string | null;
+  excerpt: string | null;
 }

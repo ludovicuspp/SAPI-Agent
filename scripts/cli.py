@@ -3,7 +3,7 @@
 Entry points::
 
     python -m scripts.cli init-db
-    python -m scripts.cli create-user --email ... --password ... --role admin|agent
+    python -m scripts.cli create-user --email ... --password ... --nombre ... --role admin|propietario|empresa
     python -m scripts.cli add-watchlist --user-email ... --name ... [--class-nice N]
     python -m scripts.cli list-watchlist --user-email ...
     python -m scripts.cli add-portfolio --user-email ... --name ... [--expediente ...]
@@ -39,11 +39,13 @@ from scripts.notifiers import email_smtp
 from scripts.db import (
     DetectionRow,
     boletines_get,
+    boletines_entries_replace,
     detections_list_for_user,
     detections_mark_notified,
     detections_pending_notification,
 )
 from scripts.orchestration import processor
+from scripts.orchestration.matching_service import analyze_boletines_for_user
 
 
 # ── helpers ────────────────────────────────────────────────────
@@ -131,6 +133,7 @@ def cmd_create_user(args):
             email=email,
             password_hash=hash_password(password),
             role=args.role,
+            nombre=args.nombre or "",
         )
         conn.commit()
         print(f"OK: usuario '{email}' (id={user_id}, role={args.role}) creado.")
@@ -148,9 +151,16 @@ def cmd_add_watchlist(args):
             name=args.name,
             class_nice=args.class_nice,
             notes=args.notes,
+            productos_servicios=args.productos_servicios,
         )
         conn.commit()
+        res = analyze_boletines_for_user(conn, user.id)
+        conn.commit()
         print(f"OK: marca vigilada '{args.name}' (id={wid}) añadida.")
+        print(
+            f"  Análisis retroactivo: {res['boletines_analizados']} boletines, "
+            f"{res['detecciones_creadas']} detecciones."
+        )
     finally:
         conn.close()
 
@@ -184,9 +194,29 @@ def cmd_add_portfolio(args):
             expediente=args.expediente,
             class_nice=args.class_nice,
             notes=args.notes,
+            pais=args.pais,
+            etiqueta=args.etiqueta,
+            tipo_registro=args.tipo_registro,
+            bufete=args.bufete,
+            solicitud=args.solicitud,
+            fecha_solicitud=args.fecha_solicitud,
+            registro=args.registro,
+            fecha_registro=args.fecha_registro,
+            fecha_vencimiento=args.fecha_vencimiento,
+            titular=args.titular,
+            tramitante=args.tramitante,
+            empresa_licenciada=args.empresa_licenciada,
+            productos_servicios=args.productos_servicios,
+            comentarios=args.comentarios,
         )
         conn.commit()
         print(f"OK: marca de portafolio '{args.name}' (id={pid}) añadida.")
+        res = analyze_boletines_for_user(conn, user.id)
+        conn.commit()
+        print(
+            f"  Análisis retroactivo: {res['boletines_analizados']} boletines, "
+            f"{res['detecciones_creadas']} detecciones."
+        )
     finally:
         conn.close()
 
@@ -200,14 +230,47 @@ def cmd_list_portfolio(args):
             print("(sin marcas en portafolio)")
             return
         rows = [
-            (p.id, p.name, p.expediente or "-", p.class_nice or "-",
-             p.status or "-", p.last_checked_at or "-")
+            (p.id, p.name, p.status or "-", p.registro or "-", p.solicitud or "-",
+             p.class_nice or "-", p.titular or "-", p.last_boletin_period or "-")
             for p in items
         ]
         _print_table(
-            ["ID", "Nombre", "Expediente", "Clase", "Último estatus", "Revisado"],
+            ["ID", "Nombre", "Estado", "Registro", "Solicitud", "Clase",
+             "Titular", "Boletín"],
             rows,
         )
+    finally:
+        conn.close()
+
+
+def cmd_portfolio_template(args):
+    from scripts import portfolio_import
+
+    Path(args.path).write_text(portfolio_import.render_template(), encoding="utf-8")
+    print(f"OK: plantilla CSV escrita en {args.path}")
+
+
+def cmd_import_portfolio(args):
+    from scripts import portfolio_import
+
+    cfg, conn = _load_conn()
+    try:
+        user = _resolve_user(conn, args.user_email)
+        content = Path(args.path).read_bytes()
+        rows, errors = portfolio_import.parse_import(content)
+        for e in errors[:20]:
+            print(f"AVISO: {e}", file=sys.stderr)
+        if not rows:
+            print("ERROR: sin filas válidas para importar.", file=sys.stderr)
+            sys.exit(2)
+        result = portfolio_import.apply_import(conn, user.id, rows)
+        conn.commit()
+        print(
+            f"OK: {result.created} creadas, {result.updated} actualizadas "
+            f"({len(result.errors)} errores)."
+        )
+        for e in result.errors[:20]:
+            print(f"  ERROR: {e}", file=sys.stderr)
     finally:
         conn.close()
 
@@ -247,6 +310,54 @@ def cmd_process_boletin(args):
         conn.close()
 
 
+def cmd_extract_entries(args):
+    """(Re)persiste las marcas de boletines en ``boletin_entries``.
+
+    Lee el ``extraction_json`` ya guardado (páginas de texto), corre el
+    parser de nuevo y reemplaza las filas del boletín. NO re-ejecuta
+    pdfplumber: es barato porque reusa el texto persistido.
+    """
+    import json
+
+    from scripts.parsers.marca_entry import MarcaEntryParser
+
+    cfg, conn = _load_conn()
+    try:
+        if getattr(args, "boletin_id", None):
+            ids: list[int] = [int(x) for x in args.boletin_id]
+        else:
+            rows = conn.execute(
+                "SELECT id FROM boletines ORDER BY id"
+            ).fetchall()
+            ids = [r["id"] for r in rows]
+
+        total_entries = 0
+        for bid in ids:
+            row = conn.execute(
+                "SELECT extraction_json FROM boletines WHERE id = ?", (bid,)
+            ).fetchone()
+            if not row or not row["extraction_json"]:
+                print(f"[{bid}] sin extraction_json, se omite")
+                continue
+            data = json.loads(row["extraction_json"])
+            pages = data.get("pages", [])
+            parser_text = processor._build_parser_text(pages)
+            page_lookup, section_lookup = processor.make_position_lookups(
+                parser_text
+            )
+            parser = MarcaEntryParser(
+                page_lookup=page_lookup, section_lookup=section_lookup,
+            )
+            entries, _stats = parser.parse_with_stats(parser_text)
+            n = boletines_entries_replace(conn, bid, entries)
+            total_entries += n
+            print(f"[{bid}] {n} marcas persistidas")
+        print(f"Total: {total_entries} marcas en {len(ids)} boletines")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def cmd_list_detections(args):
     cfg, conn = _load_conn()
     try:
@@ -260,6 +371,7 @@ def cmd_list_detections(args):
                 d.id,
                 d.boletin_id,
                 d.mark_name,
+                d.matched_with or "-",
                 d.expediente or "-",
                 d.class_nice or "-",
                 f"{d.similarity * 100:.1f}%",
@@ -270,7 +382,7 @@ def cmd_list_detections(args):
             for d in items
         ]
         _print_table(
-            ["ID", "Boletín", "Marca", "Expediente", "Clase",
+            ["ID", "Boletín", "Marca", "Match con", "Expediente", "Clase",
              "Similitud", "Fuente", "Conf.", "Tipo"],
             rows,
         )
@@ -344,6 +456,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("create-user", help="Crea un usuario.")
     s.add_argument("--email", required=True)
+    s.add_argument("--nombre", help="Nombre completo del usuario")
     s.add_argument("--password", help="Contraseña en claro (no recomendado)")
     s.add_argument(
         "--password-from-stdin",
@@ -352,9 +465,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument(
         "--role",
-        choices=["admin", "agent"],
-        default="agent",
-        help="Rol del usuario",
+        choices=["admin", "propietario", "empresa", "agent"],
+        required=True,
+        help="Rol del usuario (agent solo legacy)",
     )
 
     s = sub.add_parser("add-watchlist", help="Añade una marca vigilada.")
@@ -362,6 +475,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--name", required=True)
     s.add_argument("--class-nice", type=int)
     s.add_argument("--notes")
+    s.add_argument("--productos-servicios", "--distingue", dest="productos_servicios",
+                   help="Productos/servicios vigilados (texto PARA DISTINGUIR)")
 
     s = sub.add_parser("list-watchlist", help="Lista la watchlist del usuario.")
     s.add_argument("--user-email", required=True)
@@ -377,9 +492,34 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--name", required=True)
     s.add_argument("--expediente")
     s.add_argument("--class-nice", type=int)
+    s.add_argument("--pais", default="Venezuela")
+    s.add_argument("--etiqueta")
+    s.add_argument("--tipo-registro", choices=["Mixta", "Denominativa", "Grafica"])
+    s.add_argument("--bufete")
+    s.add_argument("--solicitud")
+    s.add_argument("--fecha-solicitud")
+    s.add_argument("--registro")
+    s.add_argument("--fecha-registro")
+    s.add_argument("--fecha-vencimiento")
+    s.add_argument("--titular")
+    s.add_argument("--tramitante")
+    s.add_argument("--empresa-licenciada")
+    s.add_argument("--productos-servicios")
+    s.add_argument("--comentarios")
     s.add_argument("--notes")
 
     s = sub.add_parser("list-portfolio", help="Lista el portafolio del usuario.")
+    s.add_argument("--user-email", required=True)
+
+    s = sub.add_parser(
+        "portfolio-template", help="Genera la plantilla CSV de importación."
+    )
+    s.add_argument("path", help="Ruta de salida del CSV")
+
+    s = sub.add_parser(
+        "import-portfolio", help="Importa marcas desde CSV (separador ';')."
+    )
+    s.add_argument("path", help="Ruta al CSV a importar")
     s.add_argument("--user-email", required=True)
 
     s = sub.add_parser(
@@ -392,6 +532,17 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Si se envía email de las nuevas detecciones",
+    )
+
+    s = sub.add_parser(
+        "extract-entries",
+        help="(Re)persiste las marcas de boletines en boletin_entries.",
+    )
+    s.add_argument(
+        "--boletin-id",
+        nargs="+",
+        action="extend",
+        help="IDs de boletines a procesar (por defecto: todos).",
     )
 
     s = sub.add_parser("list-detections", help="Lista las detecciones.")
@@ -418,7 +569,10 @@ def main(argv: list[str] | None = None) -> int:
         "list-watchlist": cmd_list_watchlist,
         "add-portfolio": cmd_add_portfolio,
         "list-portfolio": cmd_list_portfolio,
+        "portfolio-template": cmd_portfolio_template,
+        "import-portfolio": cmd_import_portfolio,
         "process-boletin": cmd_process_boletin,
+        "extract-entries": cmd_extract_entries,
         "list-detections": cmd_list_detections,
         "send-digest": cmd_send_digest,
         "stats": cmd_stats,

@@ -9,8 +9,61 @@ from scripts.schemas import (
     PortfolioIn,
     StructuredBoletinIn,
     StructuredEntryIn,
+    UserCreateIn,
     WatchlistIn,
 )
+
+
+class TestUserCreate:
+    def test_valid(self):
+        u = UserCreateIn(
+            email="user@example.com", password="pass123456",
+            nombre="Usuario Prueba", role="empresa",
+        )
+        assert u.email == "user@example.com"
+        assert u.nombre == "Usuario Prueba"
+        assert u.role == "empresa"
+
+    def test_role_required(self):
+        with pytest.raises(ValidationError):
+            UserCreateIn(
+                email="user@example.com", password="pass123456", nombre="Usuario",
+            )
+
+    def test_nombre_required(self):
+        with pytest.raises(ValidationError):
+            UserCreateIn(
+                email="user@example.com", password="pass123456", role="empresa",
+            )
+
+    def test_password_too_short(self):
+        with pytest.raises(ValidationError):
+            UserCreateIn(
+                email="user@example.com", password="short",
+                nombre="Usuario", role="empresa",
+            )
+
+    def test_invalid_email(self):
+        with pytest.raises(ValidationError):
+            UserCreateIn(
+                email="not-an-email", password="pass123456",
+                nombre="Usuario", role="empresa",
+            )
+
+    def test_invalid_role(self):
+        with pytest.raises(ValidationError):
+            UserCreateIn(
+                email="user@example.com", password="pass123456",
+                nombre="Usuario", role="superadmin",
+            )
+
+    def test_legacy_agent_role_rejected_to_create(self):
+        """agent es legacy (BD); no se admite al crear usuario nuevo."""
+        with pytest.raises(ValidationError):
+            UserCreateIn(
+                email="user@example.com", password="pass123456",
+                nombre="Usuario", role="agent",
+            )
 
 
 class TestWatchlist:

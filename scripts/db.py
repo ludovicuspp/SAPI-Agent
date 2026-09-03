@@ -12,7 +12,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
@@ -22,8 +22,9 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('admin','agent')),
-    active INTEGER NOT NULL DEFAULT 1,
+    role TEXT NOT NULL CHECK (role IN ('admin','agent','propietario','empresa')),
+    nombre TEXT NOT NULL DEFAULT '',
+    acciones TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS watchlist (
     notes TEXT,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    productos_servicios TEXT,
     UNIQUE(user_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id);
@@ -90,7 +92,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_history_dedupe
 
 CREATE TABLE IF NOT EXISTS boletines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    uploaded_by INTEGER NOT NULL REFERENCES users(id),
+    uploaded_by INTEGER REFERENCES users(id),
     filename TEXT NOT NULL,
     file_path TEXT NOT NULL,
     file_sha256 TEXT NOT NULL,
@@ -116,11 +118,41 @@ CREATE TABLE IF NOT EXISTS boletines (
     progress_total_pages INTEGER,
     progress_updated_at TEXT,
     checkpoint_json TEXT,
-    processing_batch INTEGER
+    processing_batch INTEGER,
+    hermes_progress_step TEXT,
+    hermes_progress_current_page INTEGER,
+    hermes_progress_total_pages INTEGER,
+    hermes_progress_updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_boletines_status ON boletines(status);
 CREATE INDEX IF NOT EXISTS idx_boletines_needs_hermes
     ON boletines(needs_hermes_review, hermes_processed_at);
+
+CREATE TABLE IF NOT EXISTS boletin_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    boletin_id INTEGER NOT NULL REFERENCES boletines(id) ON DELETE CASCADE,
+    expediente TEXT NOT NULL,
+    marca TEXT,
+    class_nice INTEGER,
+    clase_especial TEXT,
+    titular TEXT,
+    pais TEXT,
+    fecha_inscripcion TEXT,
+    estatus TEXT,
+    page INTEGER,
+    is_matcheable INTEGER NOT NULL DEFAULT 0,
+    is_figura INTEGER NOT NULL DEFAULT 0,
+    is_lema INTEGER NOT NULL DEFAULT 0,
+    productos_servicios TEXT,
+    fuente_parsing TEXT,
+    source TEXT,
+    excerpt TEXT,
+    entry_json TEXT,
+    UNIQUE(boletin_id, expediente)
+);
+CREATE INDEX IF NOT EXISTS idx_be_boletin ON boletin_entries(boletin_id);
+CREATE INDEX IF NOT EXISTS idx_be_marca ON boletin_entries(marca);
+CREATE INDEX IF NOT EXISTS idx_be_clase ON boletin_entries(class_nice);
 
 CREATE TABLE IF NOT EXISTS detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,6 +173,7 @@ CREATE TABLE IF NOT EXISTS detections (
     confidence TEXT NOT NULL
         CHECK (confidence IN ('high','medium','low')),
     raw_excerpt TEXT,
+    matched_with TEXT,
     detected_at TEXT NOT NULL DEFAULT (datetime('now')),
     needs_hermes_reverify INTEGER NOT NULL DEFAULT 0,
     notified_email INTEGER NOT NULL DEFAULT 0,
@@ -226,12 +259,17 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("boletines", "progress_updated_at", "TEXT"),
         ("boletines", "checkpoint_json", "TEXT"),
         ("boletines", "processing_batch", "INTEGER"),
+        ("boletines", "hermes_progress_step", "TEXT"),
+        ("boletines", "hermes_progress_current_page", "INTEGER"),
+        ("boletines", "hermes_progress_total_pages", "INTEGER"),
+        ("boletines", "hermes_progress_updated_at", "TEXT"),
         ("detections", "pais", "TEXT"),
         ("detections", "fecha_inscripcion", "TEXT"),
         ("detections", "fuente_parsing", "TEXT"),
         ("detections", "es_figura", "INTEGER NOT NULL DEFAULT 0"),
         ("detections", "es_lema", "INTEGER NOT NULL DEFAULT 0"),
         ("detections", "needs_hermes_reverify", "INTEGER NOT NULL DEFAULT 0"),
+        ("detections", "matched_with", "TEXT"),
         # Portfolio ampliado (módulo portfolio: 17 campos + historial).
         ("portfolio", "pais", "TEXT NOT NULL DEFAULT 'Venezuela'"),
         ("portfolio", "etiqueta", "TEXT"),
@@ -247,8 +285,10 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("portfolio", "empresa_licenciada", "TEXT"),
         ("portfolio", "productos_servicios", "TEXT"),
         ("portfolio", "comentarios", "TEXT"),
+        ("watchlist", "productos_servicios", "TEXT"),
         ("portfolio", "last_boletin_id", "INTEGER"),
         ("portfolio", "last_boletin_period", "TEXT"),
+        ("portfolio", "updated_at", "TEXT NOT NULL DEFAULT ''"),
     ]
     for table, column, typedef in migrations:
         try:
@@ -258,6 +298,10 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             # La columna ya existe; ignorar.
             pass
+    _migrate_users_drop_active(conn)
+    _migrate_boletines_uploaded_by_nullable(conn)
+    _migrate_users_role_check(conn)
+    _backfill_detections_matched_with(conn)
     # Índices por identidad (registro / solicitud) tras garantizar columnas.
     # Se hace aquí para que funcione en BD viejas que aún no tengan la
     # tabla portfolio (init_db corre migraciones ANTES del SCHEMA_SQL).
@@ -269,6 +313,250 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
             conn.execute(stmt)
         except sqlite3.OperationalError:
             pass
+
+
+def _backfill_detections_matched_with(conn: sqlite3.Connection) -> None:
+    """Rellena ``matched_with`` para detecciones existentes que aún no
+    lo tienen, tomando el nombre de la watchlist o portfolio asociado.
+
+    Idempotente: solo actualiza las filas con ``matched_with IS NULL``.
+    """
+    try:
+        conn.execute(
+            """
+            UPDATE detections
+            SET matched_with = COALESCE(
+                (SELECT name FROM watchlist WHERE watchlist.id = detections.watchlist_id),
+                (SELECT name FROM portfolio WHERE portfolio.id = detections.portfolio_id),
+                NULL
+            )
+            WHERE matched_with IS NULL
+              AND (watchlist_id IS NOT NULL OR portfolio_id IS NOT NULL)
+            """
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+def _migrate_users_drop_active(conn: sqlite3.Connection) -> None:
+    """Elimina la columna ``active`` de ``users`` si existe.
+
+    Los usuarios ahora se borran (DELETE real) en vez de desactivarse.
+    ``ALTER TABLE ... DROP COLUMN`` requiere SQLite 3.35+ (Python 3.12+).
+    Idempotente: si la columna no existe, SQLite lanza OperationalError
+    que se ignora.
+    """
+    try:
+        conn.execute("ALTER TABLE users DROP COLUMN active")
+    except sqlite3.OperationalError:
+        pass
+
+
+def _migrate_boletines_uploaded_by_nullable(conn: sqlite3.Connection) -> None:
+    """Hace ``boletines.uploaded_by`` NULL-able.
+
+    Necesario para poder borrar un usuario y conservar los boletines
+    que subió (``boletines`` no se puede CASCADE-borrar porque
+    ``detections.boletin_id`` los referencia).
+
+    Reconstruye la tabla con el patrón 12-step bajo
+    ``PRAGMA legacy_alter_table=ON`` y ``foreign_keys=OFF`` para que
+    ``ALTER TABLE ... RENAME`` no reescriba los ``REFERENCES`` de las
+    tablas hijas (detections, portfolio, portfolio_history, scans_log).
+    Idempotente: si la columna ya admite NULL, no hace nada.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='boletines'"
+    ).fetchone()
+    if row is None:
+        return
+    create_sql = row[0]
+    if "uploaded_by INTEGER REFERENCES" in create_sql or "uploaded_by INTEGER NULL" in create_sql:
+        # Variantes "REFERENCES" sin NOT NULL; ya es nullable.
+        if "uploaded_by INTEGER NOT NULL" not in create_sql:
+            return
+
+    # Captura índices de boletines para recrearlos tras el rebuild.
+    indexes = [
+        r[0]
+        for r in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' "
+            "AND tbl_name='boletines' AND sql IS NOT NULL"
+        ).fetchall()
+    ]
+
+    new_create = (
+        "CREATE TABLE boletines (\n"
+        "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "    uploaded_by INTEGER REFERENCES users(id),\n"
+        "    filename TEXT NOT NULL,\n"
+        "    file_path TEXT NOT NULL,\n"
+        "    file_sha256 TEXT NOT NULL,\n"
+        "    bulletin_number INTEGER,\n"
+        "    period TEXT,\n"
+        "    pages INTEGER,\n"
+        "    status TEXT NOT NULL DEFAULT 'pending'\n"
+        "        CHECK (status IN ('pending','extracting','extracted',\n"
+        "                          'hermes_pending','hermes_done','failed')),\n"
+        "    extraction_json TEXT,\n"
+        "    needs_hermes_review INTEGER NOT NULL DEFAULT 0,\n"
+        "    hermes_processed_at TEXT,\n"
+        "    hermes_error TEXT,\n"
+        "    error TEXT,\n"
+        "    uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+        "    processed_at TEXT,\n"
+        "    entries_matcheables INTEGER NOT NULL DEFAULT 0,\n"
+        "    entries_hermes_pending INTEGER NOT NULL DEFAULT 0,\n"
+        "    entries_figura INTEGER NOT NULL DEFAULT 0,\n"
+        "    entries_lema INTEGER NOT NULL DEFAULT 0,\n"
+        "    progress_step TEXT,\n"
+        "    progress_current_page INTEGER,\n"
+        "    progress_total_pages INTEGER,\n"
+        "    progress_updated_at TEXT,\n"
+        "    checkpoint_json TEXT,\n"
+        "    processing_batch INTEGER,\n"
+        "    hermes_progress_step TEXT,\n"
+        "    hermes_progress_current_page INTEGER,\n"
+        "    hermes_progress_total_pages INTEGER,\n"
+        "    hermes_progress_updated_at TEXT\n"
+        ");"
+    )
+
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("ALTER TABLE boletines RENAME TO boletines_legacy")
+        conn.execute(new_create)
+        new_cols = {
+            c[1] for c in conn.execute("PRAGMA table_info(boletines)")
+        }
+        old_cols = [
+            c[1]
+            for c in conn.execute("PRAGMA table_info(boletines_legacy)")
+            if c[1] in new_cols
+        ]
+        collist = ", ".join(old_cols)
+        conn.execute(
+            f"INSERT INTO boletines ({collist}) "
+            f"SELECT {collist} FROM boletines_legacy"
+        )
+        conn.execute("DROP TABLE boletines_legacy")
+        for idx_sql in indexes:
+            conn.execute(idx_sql)
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+
+
+def _migrate_users_role_check(conn: sqlite3.Connection) -> None:
+    """Amplía el CHECK de roles de la tabla users en BD existentes.
+
+    SQLite no permite ``ALTER CONSTRAINT``, así que se reconstruye la
+    tabla (patrón 12-step). La reconstrucción se hace con
+    ``PRAGMA legacy_alter_table=ON`` (y ``foreign_keys=OFF``): con el
+    comportamiento moderno, ``ALTER TABLE users RENAME TO users_legacy``
+    reescribe los ``REFERENCES`` de las tablas hijas hacia
+    ``users_legacy``, y el ``DROP TABLE users_legacy`` posterior falla
+    por dependencia (dejando la BD a medias).
+
+    También recupera un 12-step fallido de una versión anterior: si
+    queda una tabla ``users_legacy``, se fusionan las filas que falten
+    en ``users`` y se reconstruyen las tablas hijas cuyo ``REFERENCES``
+    haya quedado apuntando a ``users_legacy``. Idempotente.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+    ).fetchone()
+    create_sql = row[0] if row else None
+    legacy_exists = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users_legacy'"
+        ).fetchone()
+        is not None
+    )
+    already_new = create_sql is not None and "propietario" in create_sql
+
+    # Estado normal (ya migrado y sin resto): no hay nada que hacer.
+    if already_new and not legacy_exists:
+        return
+
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        # 1) Repara tablas hijas cuyo REFERENCES quedó apuntando a
+        #    users_legacy (recuperación de un 12-step fallido).
+        for tbl, sql in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='table'"
+        ).fetchall():
+            if not sql or '"users_legacy"(id)' not in sql:
+                continue
+            tmp = f'"{tbl}_repair"'
+            conn.execute(f'ALTER TABLE "{tbl}" RENAME TO {tmp}')
+            conn.execute(sql.replace('"users_legacy"(id)', '"users"(id)'))
+            cols = ", ".join(
+                c[1] for c in conn.execute(f"PRAGMA table_info({tmp})")
+            )
+            conn.execute(
+                f'INSERT INTO "{tbl}" ({cols}) SELECT {cols} FROM {tmp}'
+            )
+            conn.execute(f"DROP TABLE {tmp}")
+
+        # 2) Reconstruye users con el CHECK ampliado si aún es vieja.
+        if not already_new:
+            if create_sql is not None:
+                conn.execute("ALTER TABLE users RENAME TO users_legacy")
+            conn.execute(
+                "CREATE TABLE users (\n"
+                "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+                "    email TEXT NOT NULL UNIQUE,\n"
+                "    password_hash TEXT NOT NULL,\n"
+                "    role TEXT NOT NULL CHECK (role IN ('admin','agent','propietario','empresa')),\n"
+                "    nombre TEXT NOT NULL DEFAULT '',\n"
+                "    acciones TEXT NOT NULL DEFAULT '[]',\n"
+                "    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+                "    updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n"
+                ");"
+            )
+
+        # 3) Fusiona lo que falte desde users_legacy y lo elimina.
+        #    Se re-consulta el master: en el path "fresco" acabamos de
+        #    crear users_legacy con el RENAME del paso 2.
+        legacy_now = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='users_legacy'"
+            ).fetchone()
+            is not None
+        )
+        if legacy_now:
+            users_cols = {c[1] for c in conn.execute("PRAGMA table_info(users)")}
+            cols = ", ".join(
+                c[1]
+                for c in conn.execute("PRAGMA table_info(users_legacy)")
+                if c[1] in users_cols
+            )
+            conn.execute(
+                f"INSERT INTO users ({cols}) "
+                f"SELECT {cols} FROM users_legacy "
+                f"WHERE id NOT IN (SELECT id FROM users)"
+            )
+            conn.execute("DROP TABLE users_legacy")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+
+    issues = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if issues:
+        import warnings
+        warnings.warn(
+            f"foreign_key_check: {len(issues)} violación(es) pre-existente(s) "
+            "que no afectan esta migración. Ejecutar PRAGMA foreign_key_check "
+            "para detalles."
+        )
 
 
 @contextmanager
@@ -295,13 +583,30 @@ class UserRow:
     email: str
     password_hash: str
     role: str
-    active: int
+    nombre: str
+    acciones: str
     created_at: str
     updated_at: str
 
+    @property
+    def acciones_list(self) -> list[dict[str, Any]]:
+        try:
+            return json.loads(self.acciones or "[]")
+        except (ValueError, TypeError):
+            return []
+
 
 def _user_from_row(row: sqlite3.Row) -> UserRow:
-    return UserRow(**dict(row))
+    return UserRow(
+        id=row["id"],
+        email=row["email"],
+        password_hash=row["password_hash"],
+        role=row["role"],
+        nombre=row["nombre"] if "nombre" in row.keys() else "",
+        acciones=row["acciones"] if "acciones" in row.keys() else "[]",
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
 
 
 def users_create(
@@ -309,12 +614,42 @@ def users_create(
     email: str,
     password_hash: str,
     role: str = "agent",
+    nombre: str = "",
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO users(email, password_hash, role) VALUES (?,?,?)",
-        (email, password_hash, role),
+        "INSERT INTO users(email, password_hash, role, nombre) VALUES (?,?,?,?)",
+        (email, password_hash, role, nombre or ""),
     )
     return cur.lastrowid
+
+
+def user_log_action(
+    conn: sqlite3.Connection, user_id: int, accion: str, *, commit: bool = True
+) -> None:
+    """Registra una acción en el historial JSON del usuario.
+
+    Cada entrada es ``{"accion": ..., "timestamp": ...}``. El historial
+    se mantiene en orden (más reciente al final).
+    """
+    row = conn.execute("SELECT acciones FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        return
+    try:
+        current = json.loads(row["acciones"] or "[]")
+        if not isinstance(current, list):
+            current = []
+    except (ValueError, TypeError):
+        current = []
+    current.append({
+        "accion": accion,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    conn.execute(
+        "UPDATE users SET acciones = ?, updated_at = datetime('now') WHERE id = ?",
+        (json.dumps(current, ensure_ascii=False), user_id),
+    )
+    if commit:
+        conn.commit()
 
 
 def users_get_by_email(conn: sqlite3.Connection, email: str) -> Optional[UserRow]:
@@ -336,11 +671,25 @@ def users_count_admins(conn: sqlite3.Connection) -> int:
     return int(row["c"])
 
 
-def users_count_active_admins(conn: sqlite3.Connection) -> int:
-    row = conn.execute(
-        "SELECT COUNT(*) AS c FROM users WHERE role='admin' AND active=1"
-    ).fetchone()
-    return int(row["c"])
+def users_delete(conn: sqlite3.Connection, user_id: int) -> None:
+    """Borra un usuario definitivamente.
+
+    - ``watchlist`` / ``portfolio`` / ``detections`` / ``portfolio_history``
+      se borran en cascada vía FK (datos privados del usuario).
+    - ``boletines`` y ``scans_log`` aportan contexto al sistema y no son
+      propiedad del usuario: se desliga su referencia (``uploaded_by`` /
+      ``user_id`` → NULL) y se conservan.
+    """
+    conn.execute(
+        "UPDATE boletines SET uploaded_by = NULL WHERE uploaded_by = ?",
+        (user_id,),
+    )
+    conn.execute(
+        "UPDATE scans_log SET user_id = NULL WHERE user_id = ?",
+        (user_id,),
+    )
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
 
 
 # ── watchlist ──────────────────────────────────────────────────
@@ -355,6 +704,7 @@ class WatchlistRow:
     notes: Optional[str]
     active: int
     created_at: str
+    productos_servicios: Optional[str] = None
 
 
 def _watchlist_from_row(row: sqlite3.Row) -> WatchlistRow:
@@ -367,10 +717,13 @@ def watchlist_add(
     name: str,
     class_nice: Optional[int] = None,
     notes: Optional[str] = None,
+    *,
+    productos_servicios: Optional[str] = None,
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO watchlist(user_id, name, class_nice, notes) VALUES (?,?,?,?)",
-        (user_id, name, class_nice, notes),
+        "INSERT INTO watchlist(user_id, name, class_nice, notes, productos_servicios)"
+        " VALUES (?,?,?,?,?)",
+        (user_id, name, class_nice, notes, productos_servicios),
     )
     return cur.lastrowid
 
@@ -658,7 +1011,7 @@ def portfolio_history_list(
 @dataclass
 class BoletinRow:
     id: int
-    uploaded_by: int
+    uploaded_by: Optional[int]
     filename: str
     file_path: str
     file_sha256: str
@@ -683,6 +1036,10 @@ class BoletinRow:
     progress_updated_at: Optional[str] = None
     checkpoint_json: Optional[str] = None
     processing_batch: Optional[int] = None
+    hermes_progress_step: Optional[str] = None
+    hermes_progress_current_page: Optional[int] = None
+    hermes_progress_total_pages: Optional[int] = None
+    hermes_progress_updated_at: Optional[str] = None
 
 
 def _boletin_from_row(row: sqlite3.Row) -> BoletinRow:
@@ -691,7 +1048,7 @@ def _boletin_from_row(row: sqlite3.Row) -> BoletinRow:
 
 def boletines_create(
     conn: sqlite3.Connection,
-    uploaded_by: int,
+    uploaded_by: Optional[int],
     filename: str,
     file_path: str,
     file_sha256: str,
@@ -786,6 +1143,53 @@ def boletines_update_progress(
     conn.execute(
         f"UPDATE boletines SET {', '.join(sets)} WHERE id = ?",
         params,
+    )
+
+
+def boletines_update_hermes_progress(
+    conn: sqlite3.Connection,
+    boletin_id: int,
+    *,
+    step: Optional[str] = None,
+    current_page: Optional[int] = None,
+    total_pages: Optional[int] = None,
+) -> None:
+    """Actualiza el progreso de análisis de Hermes Vision (página a página).
+
+    Solo válido cuando el boletín está en ``extracted`` con
+    ``needs_hermes_review=1`` y aún sin ``hermes_processed_at``.
+    Siempre escribe ``hermes_progress_updated_at`` como señal temporal.
+    """
+    sets: list[str] = ["hermes_progress_updated_at = datetime('now')"]
+    params: list = []
+    if step is not None:
+        sets.append("hermes_progress_step = ?")
+        params.append(step)
+    if current_page is not None:
+        sets.append("hermes_progress_current_page = ?")
+        params.append(current_page)
+    if total_pages is not None:
+        sets.append("hermes_progress_total_pages = ?")
+        params.append(total_pages)
+    params.append(boletin_id)
+    conn.execute(
+        f"UPDATE boletines SET {', '.join(sets)} WHERE id = ?",
+        params,
+    )
+
+
+def boletines_mark_hermes_progress_done(
+    conn: sqlite3.Connection, boletin_id: int
+) -> None:
+    """Marca el progreso de Hermes como terminado y fija hermes_processed_at."""
+    conn.execute(
+        "UPDATE boletines SET"
+        " hermes_progress_step = 'done',"
+        " hermes_progress_current_page = COALESCE(hermes_progress_total_pages, hermes_progress_current_page),"
+        " hermes_progress_updated_at = datetime('now'),"
+        " hermes_processed_at = datetime('now')"
+        " WHERE id = ?",
+        (boletin_id,),
     )
 
 
@@ -964,6 +1368,166 @@ def boletines_list_recent(
     return [_boletin_from_row(r) for r in rows]
 
 
+@dataclass
+class BoletinEntryRow:
+    """Una marca extraída de un boletín (capa fuente neutral).
+
+    A diferencia de ``detections`` (multi-tenant y match-dependiente), aquí
+    se persisten TODAS las marcas del boletín para poder consultarlas en el
+    futuro, sin importar si matchean con una watchlist/portfolio.
+    """
+    id: int
+    boletin_id: int
+    expediente: str
+    marca: Optional[str] = None
+    class_nice: Optional[int] = None
+    clase_especial: Optional[str] = None
+    titular: Optional[str] = None
+    pais: Optional[str] = None
+    fecha_inscripcion: Optional[str] = None
+    estatus: Optional[str] = None
+    page: Optional[int] = None
+    is_matcheable: int = 0
+    is_figura: int = 0
+    is_lema: int = 0
+    productos_servicios: Optional[str] = None
+    fuente_parsing: Optional[str] = None
+    source: Optional[str] = None
+    excerpt: Optional[str] = None
+    entry_json: Optional[str] = None
+
+
+def _entry_from_row(
+    conn: sqlite3.Connection, r: sqlite3.Row
+) -> BoletinEntryRow:
+    return BoletinEntryRow(**dict(r))
+
+
+def _entry_insert_values(
+    boletin_id: int, e: Any
+) -> dict[str, Any]:
+    """Normaliza una entrada (parser ``MarcaEntry`` o shape Hermes) a columnas."""
+    _fecha = getattr(e, "fecha_inscripcion", None)
+    if hasattr(_fecha, "isoformat"):
+        _fecha = _fecha.isoformat()
+    return {
+        "boletin_id": boletin_id,
+        "expediente": getattr(e, "expediente", None),
+        "marca": getattr(e, "marca", None),
+        "class_nice": getattr(e, "class_nice", None)
+        or getattr(e, "clase_niza", None) or getattr(e, "clase", None),
+        "clase_especial": getattr(e, "clase_especial", None),
+        "titular": getattr(e, "titular", None),
+        "pais": getattr(e, "pais", None),
+        "fecha_inscripcion": _fecha,
+        "estatus": getattr(e, "estatus", None),
+        "page": getattr(e, "page", None) or getattr(e, "pagina", None),
+        "is_matcheable": 1 if getattr(e, "matcheable", False) else 0,
+        "is_figura": 1 if getattr(e, "es_figura", False) else 0,
+        "is_lema": 1 if getattr(e, "es_lema", False) else 0,
+        "productos_servicios": getattr(e, "productos_servicios", None),
+        "fuente_parsing": getattr(e, "fuente_parsing", None)
+        or getattr(e, "fuente", None),
+        "source": getattr(e, "source", None),
+        "excerpt": getattr(e, "excerpt", None),
+        "entry_json": json.dumps(
+            {
+                k: v for k, v in getattr(e, "__dict__", {}).items()
+                if k not in ("page", "pagina", "fecha_inscripcion")
+            },
+            ensure_ascii=False, default=str,
+        ),
+    }
+
+
+def boletin_entry_upsert(
+    conn: sqlite3.Connection, boletin_id: int, e: Any
+) -> None:
+    """Inserta o actualiza (por ``UNIQUE(boletin_id, expediente)``) una marca.
+
+    Usado por Hermes para refinar sin borrar lo ya persistido por el parser.
+    No hace ``DELETE`` previo.
+    """
+    r = _entry_insert_values(boletin_id, e)
+    conn.execute(
+        "INSERT INTO boletin_entries("
+        " boletin_id, expediente, marca, class_nice, clase_especial,"
+        " titular, pais, fecha_inscripcion, estatus, page,"
+        " is_matcheable, is_figura, is_lema, productos_servicios,"
+        " fuente_parsing, source, excerpt, entry_json)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(boletin_id, expediente) DO UPDATE SET"
+        " marca=excluded.marca, class_nice=excluded.class_nice,"
+        " clase_especial=excluded.clase_especial, titular=excluded.titular,"
+        " pais=excluded.pais, fecha_inscripcion=excluded.fecha_inscripcion,"
+        " estatus=excluded.estatus, page=excluded.page,"
+        " is_matcheable=excluded.is_matcheable,"
+        " is_figura=excluded.is_figura, is_lema=excluded.is_lema,"
+        " productos_servicios=excluded.productos_servicios,"
+        " fuente_parsing=excluded.fuente_parsing, source=excluded.source,"
+        " excerpt=excluded.excerpt, entry_json=excluded.entry_json",
+        (
+            r["boletin_id"], r["expediente"], r["marca"],
+            r["class_nice"], r["clase_especial"], r["titular"],
+            r["pais"], r["fecha_inscripcion"], r["estatus"],
+            r["page"], r["is_matcheable"], r["is_figura"],
+            r["is_lema"], r["productos_servicios"],
+            r["fuente_parsing"], r["source"], r["excerpt"],
+            r["entry_json"],
+        ),
+    )
+
+
+def boletines_entries_replace(
+    conn: sqlite3.Connection,
+    boletin_id: int,
+    entries: Iterable[Any],
+) -> int:
+    """Reemplaza las marcas extraídas de un boletín por las dadas.
+
+    Borra las filas previas del boletín e inserta las nuevas. Devuelve
+    cuántas filas se insertaron.
+    """
+    conn.execute(
+        "DELETE FROM boletin_entries WHERE boletin_id = ?", (boletin_id,)
+    )
+    added = 0
+    for e in entries:
+        boletin_entry_upsert(conn, boletin_id, e)
+        added += 1
+    conn.commit()
+    return added
+
+
+def boletines_entries_list(
+    conn: sqlite3.Connection, boletin_id: int
+) -> list[BoletinEntryRow]:
+    rows = conn.execute(
+        "SELECT * FROM boletin_entries WHERE boletin_id = ?"
+        " ORDER BY class_nice IS NULL, class_nice, marca",
+        (boletin_id,),
+    ).fetchall()
+    return [_entry_from_row(conn, r) for r in rows]
+
+
+def boletines_list_extracted_for_user(
+    conn: sqlite3.Connection, user_id: int
+) -> list[BoletinRow]:
+    """Boletines del usuario con extracción ya persistida.
+
+    Se usan para el análisis retroactivo de una marca recién cargada en
+    watchlist/portafolio: re-leen el ``extraction_json`` (páginas de
+    texto) sin volver a extraer el PDF.
+    """
+    rows = conn.execute(
+        "SELECT * FROM boletines"
+        " WHERE uploaded_by = ? AND extraction_json IS NOT NULL"
+        " ORDER BY id",
+        (user_id,),
+    ).fetchall()
+    return [_boletin_from_row(r) for r in rows]
+
+
 # ── detections ─────────────────────────────────────────────────
 
 
@@ -993,10 +1557,13 @@ class DetectionRow:
     es_figura: int = 0
     es_lema: int = 0
     needs_hermes_reverify: int = 0
+    matched_with: Optional[str] = None
 
 
 def _detection_from_row(row: sqlite3.Row) -> DetectionRow:
-    return DetectionRow(**dict(row))
+    data = dict(row)
+    data.setdefault("matched_with", None)
+    return DetectionRow(**data)
 
 
 def detections_add(
@@ -1016,6 +1583,7 @@ def detections_add(
     class_nice: Optional[int] = None,
     page: Optional[int] = None,
     raw_excerpt: Optional[str] = None,
+    matched_with: Optional[str] = None,
     pais: Optional[str] = None,
     fecha_inscripcion: Optional[str] = None,
     fuente_parsing: Optional[str] = None,
@@ -1027,8 +1595,8 @@ def detections_add(
         " boletin_id, user_id, watchlist_id, portfolio_id,"
         " expediente, mark_name, titular, class_nice, page,"
         " similarity, match_kind, source, confidence, raw_excerpt,"
-        " pais, fecha_inscripcion, fuente_parsing, es_figura, es_lema)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " matched_with, pais, fecha_inscripcion, fuente_parsing, es_figura, es_lema)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             boletin_id,
             user_id,
@@ -1044,6 +1612,7 @@ def detections_add(
             source,
             confidence,
             raw_excerpt,
+            matched_with,
             pais,
             fecha_inscripcion,
             fuente_parsing,
@@ -1134,10 +1703,17 @@ class UserStats:
     last_boletin_at: Optional[str]
 
 
-def stats_for_user(conn: sqlite3.Connection, user_id: int) -> UserStats:
+def stats_for_user(
+    conn: sqlite3.Connection, user_id: int, *, admin_all: bool = False
+) -> UserStats:
     def _scalar(sql: str, params: tuple = ()) -> int:
         row = conn.execute(sql, params).fetchone()
         return int(row[0]) if row else 0
+
+    # Multi-tenant: los boletines se cuentan solo del usuario, salvo que el
+    # admin use admin_all=True para ver el total global.
+    boletin_scope = "" if admin_all else "WHERE uploaded_by=?"
+    boletin_params = () if admin_all else (user_id,)
 
     return UserStats(
         watchlist_count=_scalar(
@@ -1147,13 +1723,13 @@ def stats_for_user(conn: sqlite3.Connection, user_id: int) -> UserStats:
             "SELECT COUNT(*) FROM portfolio WHERE user_id=?", (user_id,)
         ),
         boletines_count=_scalar(
-            "SELECT COUNT(*) FROM boletines WHERE uploaded_by=?", (user_id,)
+            f"SELECT COUNT(*) FROM boletines {boletin_scope}", boletin_params
         ),
         detections_count=_scalar(
             "SELECT COUNT(*) FROM detections WHERE user_id=?", (user_id,)
         ),
         last_boletin_at=conn.execute(
-            "SELECT MAX(uploaded_at) FROM boletines WHERE uploaded_by=?",
-            (user_id,),
+            f"SELECT MAX(uploaded_at) FROM boletines {boletin_scope}",
+            boletin_params,
         ).fetchone()[0],
     )

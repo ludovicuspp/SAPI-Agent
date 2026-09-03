@@ -47,7 +47,7 @@ python -m scripts.cli init-db
 | Qué | Comando |
 |---|---|
 | Schema | `python -m scripts.cli init-db` |
-| Usuario | `python -m scripts.cli create-user --email … --role admin\|agent` |
+| Usuario | `python -m scripts.cli create-user --email … --nombre … --role admin\|propietario\|empresa` |
 | Watchlist | `python -m scripts.cli add-watchlist --user-email … --name … [--class-nice N]` |
 | Portfolio | `python -m scripts.cli add-portfolio --user-email … --name … [--expediente …]` |
 | Listar WL | `python -m scripts.cli list-watchlist --user-email … [--only-active]` |
@@ -148,7 +148,14 @@ suele ser cap del proxy, no del backend.
 
 - Multi-tenant: `watchlist` / `portfolio` / `detections` tienen
   `user_id`. **`boletines` usa `uploaded_by`**, no `user_id`.
-  API filtra por `current_user.id` salvo rol `admin`.
+  `uploaded_by` es nullable (NULL cuando se borra el usuario que lo
+  subió; el boletín se conserva). API filtra por `current_user.id`
+  salvo rol `admin`.
+- Usuarios se **borran** (DELETE real), nunca se desactivan. `users_delete`
+  en `scripts/db.py`: cascada sobre `watchlist` / `portfolio` /
+  `detections` / `portfolio_history`; SET NULL sobre
+  `boletines.uploaded_by` y `scans_log.user_id`. Guarda: no borrar
+  al último admin ni a uno mismo (ver `api/routers/users.py`).
 - Una sola capa de datos: `scripts/db.py`. CLI y API escriben ahí
   (`api/deps.py::get_db` = una conexión por request).
 - SQLite con `check_same_thread=False` (threadpool de uvicorn).
@@ -157,11 +164,17 @@ suele ser cap del proxy, no del backend.
 - `source ∈ {pdfplumber_text, hermes_llm, hermes_vision}`,
   `confidence ∈ {high, medium, low}`,
   `match_kind ∈ {similar, own_status}`,
-  `role ∈ {admin, agent}`. Estatus: `EstatusLiteral` en
-  `scripts/schemas.py`. No inventes valores.
+  `role ∈ {admin, propietario, empresa}` (`agent` solo legacy en BD).
+  Estatus: `EstatusLiteral` en `scripts/schemas.py`. No inventes valores.
 - Dedupe detections: UNIQUE `(boletin_id, expediente, watchlist_id)`.
 - Patrón de parser nuevo → `scripts/parsers/patterns/` + test en
   `tests/test_patterns.py`.
+- Migraciones de schema (`scripts/db.py`): para reconstruir una tabla
+  con CHECK ampliado, `ALTER TABLE ... RENAME` reescribe los
+  `REFERENCES` de las tablas hijas **aunque** `foreign_keys=OFF`.
+  Usa `PRAGMA legacy_alter_table=ON` durante el 12-step (ver
+  `_migrate_users_role_check` y `tests/test_db.py::TestMigrationRoleCheck`).
+  El migrador recupera también `users_legacy` sobrante de una versión fallida.
 
 ## No hacer
 

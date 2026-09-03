@@ -72,6 +72,7 @@ async def reverify_with_hermes(
         (det["boletin_id"],),
     )
     conn.commit()
+    db.user_log_action(conn, user.id, f"reverificar_detection:{detection_id}")
 
     det2 = conn.execute(
         "SELECT * FROM detections WHERE id = ?", (detection_id,)

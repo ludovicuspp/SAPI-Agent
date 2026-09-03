@@ -32,6 +32,7 @@ class MarcaEntry:
     matcheable: bool = False
     es_figura: bool = False
     es_lema: bool = False
+    productos_servicios: Optional[str] = None
     fuente_parsing: str = "pattern_a"
 
 
@@ -172,6 +173,7 @@ class MarcaEntryParser:
             matcheable=marca is not None,
             es_figura=raw.get("es_figura", False),
             es_lema=raw.get("clase_especial") == "LC",
+            productos_servicios=raw.get("productos_servicios"),
             fuente_parsing=fuente,
             excerpt=raw.get("excerpt"),
         )

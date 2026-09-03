@@ -29,6 +29,7 @@ npm-debug.log*
 # Datos locales (SQLite + uploads)
 data/sapi.db
 data/sapi.db-*
+data/sapi.db.bak_*
 data/uploads/*
 !data/uploads/.gitkeep
 data/checkpoints/*

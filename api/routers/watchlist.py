@@ -6,7 +6,7 @@ import sqlite3
 
 from scripts import db
 from api.deps import get_db, get_current_user
-from api.routers._helpers import watchlist_to_out
+from api.routers._helpers import run_retroactive_analysis, watchlist_to_out
 from scripts.schemas import WatchlistIn, WatchlistOut
 
 router = APIRouter()
@@ -31,14 +31,23 @@ async def add_watchlist(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     try:
-        wid = db.watchlist_add(conn, user.id, body.name, body.class_nice, body.notes)
+        wid = db.watchlist_add(
+            conn,
+            user.id,
+            body.name,
+            body.class_nice,
+            body.notes,
+            productos_servicios=body.productos_servicios,
+        )
         conn.commit()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    db.user_log_action(conn, user.id, f"crear_watchlist:{body.name}")
     rows = db.watchlist_list_for_user(conn, user.id)
     row = next((r for r in rows if r.id == wid), None)
     if row is None:
         raise HTTPException(status_code=404, detail="Watchlist no encontrada")
+    run_retroactive_analysis(conn, user, f"watchlist:{body.name}")
     return watchlist_to_out(row)
 
 
@@ -50,3 +59,4 @@ async def deactivate_watchlist(
 ):
     db.watchlist_toggle(conn, watchlist_id, user.id, active=False)
     conn.commit()
+    db.user_log_action(conn, user.id, f"desactivar_watchlist:{watchlist_id}")

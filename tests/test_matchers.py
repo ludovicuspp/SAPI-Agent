@@ -117,3 +117,13 @@ class TestCombined:
     def test_thresholds_from_settings(self):
         th = combined.Thresholds.from_settings(85, 80)
         assert th.fuzzy == 0.80
+
+    def test_class_nice_mismatch_is_not_a_match(self):
+        result = combined.score_pair(
+            "ACME",
+            "ACME",
+            watch_class_nice=25,
+            candidate_class_nice=9,
+        )
+        assert not result.is_match
+        assert result.class_nice_check == "mismatch"

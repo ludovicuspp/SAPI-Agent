@@ -17,12 +17,11 @@ async def login(body: LoginIn, conn: sqlite3.Connection = Depends(get_db)):
     user = db.users_get_by_email(conn, body.email)
     if user is None:
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
-    if not user.active:
-        raise HTTPException(status_code=401, detail="Usuario inactivo")
     if not auth.verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
     cfg = get_settings()
     token = auth.create_access_token(
         user.id, user.role, secret=cfg.jwt_secret, expires_min=cfg.jwt_expires_min,
     )
+    db.user_log_action(conn, user.id, "login")
     return TokenOut(access_token=token, expires_in=cfg.jwt_expires_min)

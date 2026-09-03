@@ -1,10 +1,12 @@
 """Helpers para convertir Row dataclasses de db.py → Pydantic schemas."""
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from typing import Optional
 
 from scripts import db
+from scripts.orchestration.matching_service import analyze_boletines_for_user
 from scripts.schemas import (
     BoletinOut,
     DetectionOut,
@@ -15,12 +17,35 @@ from scripts.schemas import (
 )
 
 
+def run_retroactive_analysis(
+    conn, user: db.UserRow, label: str
+) -> None:
+    """Re-analiza los boletines ya extraídos del usuario al cargar una
+    marca nueva en watchlist/portafolio.
+
+    Corre de forma síncrona y solo registra el resultado en
+    ``user_log_action`` (no altera la respuesta de la API).
+    """
+    try:
+        result = analyze_boletines_for_user(conn, user.id)
+        db.user_log_action(
+            conn,
+            user.id,
+            f"analizar_{label}:{result['boletines_analizados']} "
+            f"boletines/{result['detecciones_creadas']} detecciones",
+        )
+    except Exception:
+        # El análisis no debe romper la creación de la marca.
+        conn.rollback()
+
+
 def user_to_out(r: db.UserRow) -> UserOut:
     return UserOut(
         id=r.id,
         email=r.email,
         role=r.role,
-        active=bool(r.active),
+        nombre=r.nombre or "",
+        acciones=r.acciones_list,
         created_at=r.created_at,
     )
 
@@ -32,6 +57,7 @@ def watchlist_to_out(r: db.WatchlistRow) -> WatchlistOut:
         name=r.name,
         class_nice=r.class_nice,
         notes=r.notes,
+        productos_servicios=getattr(r, "productos_servicios", None),
         active=bool(r.active),
         created_at=r.created_at,
     )
@@ -82,10 +108,15 @@ def history_to_out(r: db.PortfolioHistoryRow) -> PortfolioHistoryOut:
     )
 
 
-def boletin_to_out(r: db.BoletinRow) -> BoletinOut:
+def boletin_to_out(r: db.BoletinRow, conn: sqlite3.Connection) -> BoletinOut:
+    uploader = db.users_get(conn, r.uploaded_by) if r.uploaded_by is not None else None
+    uploaded_by_name = None
+    if uploader is not None:
+        uploaded_by_name = (uploader.nombre or uploader.email) or None
     return BoletinOut(
         id=r.id,
         uploaded_by=r.uploaded_by,
+        uploaded_by_name=uploaded_by_name,
         filename=r.filename,
         file_path=r.file_path,
         file_sha256=r.file_sha256,
@@ -106,6 +137,12 @@ def boletin_to_out(r: db.BoletinRow) -> BoletinOut:
         progress_current_page=getattr(r, "progress_current_page", None),
         progress_total_pages=getattr(r, "progress_total_pages", None),
         processing_batch=getattr(r, "processing_batch", None),
+        hermes_progress_step=getattr(r, "hermes_progress_step", None),
+        hermes_progress_current_page=getattr(r, "hermes_progress_current_page", None),
+        hermes_progress_total_pages=getattr(r, "hermes_progress_total_pages", None),
+        hermes_progress_updated_at=_parse_dt(
+            getattr(r, "hermes_progress_updated_at", None)
+        ),
     )
 
 
@@ -126,6 +163,7 @@ def detection_to_out(r: db.DetectionRow) -> DetectionOut:
         source=r.source,
         confidence=r.confidence,
         raw_excerpt=r.raw_excerpt,
+        matched_with=getattr(r, "matched_with", None),
         detected_at=r.detected_at,
         notified_email=bool(r.notified_email),
         pais=r.pais,

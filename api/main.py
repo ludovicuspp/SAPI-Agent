@@ -48,6 +48,16 @@ def _mount_dashboard(app: FastAPI) -> None:
             name="dashboard-assets",
         )
 
+    # Uploads del usuario (etiquetas del portfolio) servidos estáticamente.
+    # Path almacenado en BDD como ``/uploads/etiquetas/<archivo>``.
+    uploads_dir = get_settings().data_dir / "uploads"
+    if uploads_dir.is_dir():
+        app.mount(
+            "/uploads",
+            StaticFiles(directory=str(uploads_dir)),
+            name="uploads",
+        )
+
     favicon = DASHBOARD_DIST / "favicon.svg"
     if favicon.is_file():
         app.mount(

@@ -94,7 +94,6 @@ def test_metrics_endpoint_admin_ok(client):
     assert r.status_code == 200
     body = r.json()
     assert body["users"] == 2
-    assert body["users_active"] == 2
     assert body["boletines_total"] == 2
     assert "extracted" in body["boletines_por_status"]
     assert body["detections_total"] == 1

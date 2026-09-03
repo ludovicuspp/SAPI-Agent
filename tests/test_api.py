@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import io
+import os
 from pathlib import Path
 from typing import Iterator
 from unittest.mock import patch
@@ -161,12 +162,13 @@ def test_users_create(client: TestClient, admin_token: str):
     r = client.post("/api/users", json={
         "email": "new@example.com",
         "password": "newpass123456",
-        "role": "agent",
+        "nombre": "Nuevo Usuario",
+        "role": "empresa",
     }, headers=_auth_header(admin_token))
     assert r.status_code == 201
     data = r.json()
     assert data["email"] == "new@example.com"
-    assert data["role"] == "agent"
+    assert data["role"] == "empresa"
 
 
 # ── Watchlist ────────────────────────────────────────────────────
@@ -287,6 +289,203 @@ def test_boletines_empty_list(client: TestClient, agent_token: str):
 def test_boletines_not_found(client: TestClient, agent_token: str):
     r = client.get("/api/boletines/999", headers=_auth_header(agent_token))
     assert r.status_code == 404
+
+
+def _make_second_agent(
+    tmp_db: sqlite3.Connection,
+) -> tuple[db.UserRow, str]:
+    """Crea un segundo usuario no-admin y su token."""
+    uid = db.users_create(
+        tmp_db, "otro@example.com", auth.hash_password("otro123456"), "agent",
+    )
+    tmp_db.commit()
+    user = db.users_get(tmp_db, uid)
+    cfg = Settings()
+    token = auth.create_access_token(
+        uid, user.role, secret=cfg.jwt_secret, expires_min=cfg.jwt_expires_min,
+    )
+    return user, token
+
+
+def test_list_boletines_isolated_by_user(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+    admin_token: str,
+):
+    """Un usuario no-admin NO ve los boletines subidos por otro usuario.
+
+    El admin sí ve todos. Regresión: antes la lista pasaba `user_id=None`
+    y todos veían todos.
+    """
+    bid_a, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id, filename="a.pdf")
+    other, other_token = _make_second_agent(tmp_db)
+    bid_b, _ = _make_extracted_boletin(tmp_db, tmp_path, other.id, filename="b.pdf")
+
+    r = client.get("/api/boletines", headers=_auth_header(agent_token))
+    ids = [b["id"] for b in r.json()]
+    assert bid_a in ids
+    assert bid_b not in ids
+
+    r = client.get("/api/boletines", headers=_auth_header(other_token))
+    ids = [b["id"] for b in r.json()]
+    assert bid_b in ids
+    assert bid_a not in ids
+
+    r = client.get("/api/boletines", headers=_auth_header(admin_token))
+    ids = [b["id"] for b in r.json()]
+    assert bid_a in ids
+    assert bid_b in ids
+
+
+def test_get_boletin_foreign_forbidden(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+    admin_token: str,
+):
+    """Detalle de un boletín ajeno → 404 para no-admin; el admin lo ve."""
+    other, _ = _make_second_agent(tmp_db)
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, other.id, filename="ajeno.pdf")
+
+    r = client.get(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
+    assert r.status_code == 404
+
+    r = client.get(f"/api/boletines/{bid}", headers=_auth_header(admin_token))
+    assert r.status_code == 200
+    assert r.json()["id"] == bid
+
+
+def test_boletin_entries_endpoint_scoped(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+    admin_token: str,
+):
+    """El endpoint de marcas de un boletín respeta la propiedad.
+
+    Dueño → 200 con las marcas; usuario ajeno → 404; admin → 200.
+    """
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id, filename="mio.pdf")
+    other, other_token = _make_second_agent(tmp_db)
+
+    class _E:
+        def __init__(self, exp, marca, clase):
+            self.expediente = exp
+            self.marca = marca
+            self.class_nice = clase
+            self.clase_especial = None
+            self.titular = "Titular"
+            self.pais = "VE"
+            self.fecha_inscripcion = None
+            self.estatus = "PUBLICADA"
+            self.page = 1
+            self.matcheable = True
+            self.es_figura = False
+            self.es_lema = False
+            self.productos_servicios = None
+            self.fuente_parsing = "pattern_a"
+            self.source = None
+            self.excerpt = "x"
+
+    db.boletines_entries_replace(
+        tmp_db, bid, [_E("E-1", "MARCA A", 3), _E("E-2", "MARCA B", 9)]
+    )
+    tmp_db.commit()
+
+    # Dueño ve sus marcas.
+    r = client.get(f"/api/boletines/{bid}/entries", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 2
+    assert {e["marca"] for e in data} == {"MARCA A", "MARCA B"}
+    assert all(e["boletin_id"] == bid for e in data)
+
+    # Usuario ajeno → 404 (mismo ocultamiento que el detalle).
+    r = client.get(f"/api/boletines/{bid}/entries", headers=_auth_header(other_token))
+    assert r.status_code == 404
+
+    # Admin lo ve.
+    r = client.get(f"/api/boletines/{bid}/entries", headers=_auth_header(admin_token))
+    assert r.status_code == 200
+    assert len(r.json()) == 2
+
+
+def test_summary_boletines_scoped(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+    admin_token: str,
+):
+    """El resumen no filtra los boletines del usuario hacia otro usuario."""
+    other, other_token = _make_second_agent(tmp_db)
+    _make_extracted_boletin(tmp_db, tmp_path, agent_user.id, filename="a.pdf")
+    _make_extracted_boletin(tmp_db, tmp_path, other.id, filename="b.pdf")
+
+    r = client.get("/api/summary", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    data = r.json()
+    assert data["boletines_count"] == 1
+    recents = [b["id"] for b in data["recent_boletines"]]
+    assert len(recents) == 1
+
+    r = client.get("/api/summary", headers=_auth_header(admin_token))
+    data = r.json()
+    assert data["boletines_count"] == 2
+    assert len(data["recent_boletines"]) == 2
+
+
+def test_ws_progress_requires_token(client: TestClient):
+    """Sin token el WS se cierra sin aceptar (regresión: antes aceptaba)."""
+    from fastapi import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/api/boletines/ws/1"):
+            pass
+
+
+def test_ws_progress_foreign_forbidden(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """Un no-admin suscrito al WS de un boletín ajeno recibe not_found y se cierra."""
+    from fastapi import WebSocketDisconnect
+
+    other, _ = _make_second_agent(tmp_db)
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, other.id, filename="ajeno.pdf")
+
+    token = agent_token
+    with client.websocket_connect(f"/api/boletines/ws/{bid}?token={token}") as ws:
+        msg = ws.receive_json()
+        assert msg["error"] == "not_found"
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
+
+
+def test_ws_progress_owner_connects(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """El dueño del boletín sí puede suscribirse al WS."""
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id, filename="propio.pdf")
+    token = agent_token
+    with client.websocket_connect(f"/api/boletines/ws/{bid}?token={token}") as ws:
+        msg = ws.receive_json()
+        assert msg.get("boletin_id") == bid
 
 
 # ── Detections ───────────────────────────────────────────────────
@@ -452,6 +651,124 @@ def test_structured_wrong_token(client: TestClient, tmp_db: sqlite3.Connection):
     assert r.status_code in (403, 503)
 
 
+def test_hermes_progress_updates_boletin(client: TestClient, tmp_db: sqlite3.Connection):
+    """Hermes reporta avance página a página y se refleja en el boletín."""
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid = db.boletines_create(tmp_db, uid, "test.pdf", "/tmp/test.pdf", "abc")
+    tmp_db.execute(
+        "UPDATE boletines SET status='extracted', needs_hermes_review=1, "
+        "hermes_processed_at=NULL WHERE id=?",
+        (bid,),
+    )
+    tmp_db.commit()
+    os.environ["SERVICE_TOKEN_HERMES"] = "valid-hermes-token"
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+
+    r = client.post(
+        f"/api/boletines/{bid}/hermes-progress",
+        json={"step": "analyzing_page", "current_page": 512, "total_pages": 1852},
+        headers={"X-Hermes-Token": "valid-hermes-token"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["step"] == "analyzing_page"
+    assert body["current_page"] == 512
+    assert body["total_pages"] == 1852
+    assert body["updated_at"] is not None
+
+    row = db.boletines_get(tmp_db, bid)
+    assert row.hermes_progress_step == "analyzing_page"
+    assert row.hermes_progress_current_page == 512
+    assert row.hermes_progress_total_pages == 1852
+    assert row.hermes_progress_updated_at is not None
+
+
+def test_hermes_progress_already_processed(client: TestClient, tmp_db: sqlite3.Connection):
+    """Boletín ya procesado → 409, no se sobrescribe el progreso."""
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid = db.boletines_create(tmp_db, uid, "test.pdf", "/tmp/test.pdf", "abc")
+    tmp_db.execute(
+        "UPDATE boletines SET status='extracted', needs_hermes_review=1, "
+        "hermes_processed_at='2026-01-01 00:00:00' WHERE id=?",
+        (bid,),
+    )
+    tmp_db.commit()
+    os.environ["SERVICE_TOKEN_HERMES"] = "valid-hermes-token"
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+
+    r = client.post(
+        f"/api/boletines/{bid}/hermes-progress",
+        json={"step": "analyzing_page", "current_page": 10, "total_pages": 20},
+        headers={"X-Hermes-Token": "valid-hermes-token"},
+    )
+    assert r.status_code == 409
+    row = db.boletines_get(tmp_db, bid)
+    assert row.hermes_progress_step is None
+
+
+def test_hermes_progress_wrong_token(client: TestClient, tmp_db: sqlite3.Connection):
+    """Token de Hermes incorrecto o ausente → 403/503."""
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid = db.boletines_create(tmp_db, uid, "test.pdf", "/tmp/test.pdf", "abc")
+    tmp_db.commit()
+    r = client.post(
+        f"/api/boletines/{bid}/hermes-progress",
+        json={"step": "analyzing_page", "current_page": 1, "total_pages": 2},
+    )
+    assert r.status_code in (403, 503)
+
+
+def test_hermes_done_noop_marks_processed(client: TestClient, tmp_db: sqlite3.Connection):
+    """Hermes cierra un boletín no-op: se marca procesado sin entries."""
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid = db.boletines_create(tmp_db, uid, "test.pdf", "/tmp/test.pdf", "abc")
+    tmp_db.execute(
+        "UPDATE boletines SET status='extracted', needs_hermes_review=1, "
+        "hermes_processed_at=NULL, hermes_progress_current_page=10, "
+        "hermes_progress_total_pages=10 WHERE id=?",
+        (bid,),
+    )
+    tmp_db.commit()
+    os.environ["SERVICE_TOKEN_HERMES"] = "valid-hermes-token"
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+
+    r = client.post(
+        f"/api/boletines/{bid}/hermes-done",
+        json={"boletin_id": bid},
+        headers={"X-Hermes-Token": "valid-hermes-token"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "processed"
+    assert r.json()["entries_added"] == 0
+
+    row = db.boletines_get(tmp_db, bid)
+    assert row.hermes_processed_at is not None
+    assert row.hermes_progress_step == "done"
+
+    # Idempotente: la segunda llamada devuelve already_processed.
+    r2 = client.post(
+        f"/api/boletines/{bid}/hermes-done",
+        json={"boletin_id": bid},
+        headers={"X-Hermes-Token": "valid-hermes-token"},
+    )
+    assert r2.json()["status"] == "already_processed"
+
+
+def test_hermes_done_requires_token(client: TestClient, tmp_db: sqlite3.Connection):
+    """Sin token de Hermes → 403/503."""
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid = db.boletines_create(tmp_db, uid, "test.pdf", "/tmp/test.pdf", "abc")
+    tmp_db.commit()
+    r = client.post(
+        f"/api/boletines/{bid}/hermes-done",
+        json={"boletin_id": bid},
+    )
+    assert r.status_code in (403, 503)
+
+
 # ── Boletines DELETE ────────────────────────────────────────────
 
 
@@ -575,6 +892,29 @@ def test_delete_boletin_409_if_hermes_pending(
     )
     r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
     assert r.status_code == 409
+
+
+def test_delete_boletin_failed_allowed_even_hermes_pending(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """Un boletín `failed` con needs_hermes_review SÍ se puede borrar.
+
+    Regresión: antes, un boletín fallido (status='failed', sin proceso) con
+    ``needs_hermes_review=1`` y sin ``hermes_processed_at`` quedaba atrapado
+    en el gate 409 "se está procesando", y el usuario no podía eliminarlo
+    para reintentar. El error del boletín 26 (`'MarcaEntry' ... 'clase'`).
+    """
+    bid, file_path = _make_extracted_boletin(
+        tmp_db, tmp_path, agent_user.id,
+        status="failed", needs_hermes_review=True, hermes_processed_at=None,
+    )
+    r = client.delete(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
+    assert r.status_code == 204
+    assert db.boletines_get(tmp_db, bid) is None
 
 
 def test_delete_boletin_keeps_shared_file(

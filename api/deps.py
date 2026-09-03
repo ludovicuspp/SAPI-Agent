@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Iterator
+from typing import Iterator, Optional
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, WebSocket
 
 from scripts import db
 from scripts.auth import InvalidTokenError, decode_token
@@ -35,8 +35,8 @@ def get_current_user(
     except InvalidTokenError as e:
         raise HTTPException(status_code=401, detail=str(e))
     user = db.users_get(conn, int(payload["sub"]))
-    if user is None or not user.active:
-        raise HTTPException(status_code=401, detail="Usuario no encontrado o inactivo")
+    if user is None:
+        raise HTTPException(status_code=401, detail="Usuario no encontrado")
     return user
 
 
@@ -46,6 +46,28 @@ def require_admin(
     """Solo permite pasar a admins."""
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Requiere rol admin")
+    return user
+
+
+def get_ws_user(
+    websocket: WebSocket, conn: sqlite3.Connection = Depends(get_db)
+) -> Optional[db.UserRow]:
+    """Valida el JWT de un WebSocket (query param `token`).
+
+    Devuelve `None` si el token falta o es inválido; el endpoint WS decide
+    cerrar (no aceptar) en ese caso.
+    """
+    token = websocket.query_params.get("token")
+    if not token:
+        return None
+    cfg = get_settings()
+    try:
+        payload = decode_token(token, secret=cfg.jwt_secret)
+    except InvalidTokenError:
+        return None
+    user = db.users_get(conn, int(payload["sub"]))
+    if user is None:
+        return None
     return user
 
 

@@ -38,18 +38,20 @@ from scripts.db import (
     boletines_mark_failed,
     boletines_save_checkpoint,
     boletines_update_progress,
-    detections_add,
+    boletines_entries_replace,
     detections_mark_notified,
     detections_pending_notification,
     scans_log_record,
+    users_list,
     watchlist_list_for_user,
 )
 from scripts.extractors import pdf_meta, pdf_batch
 from scripts.matcher import combined
 from scripts.notifiers import email_smtp
-from scripts.orchestration.portfolio_sync import verify_entries_for_user
+from scripts.orchestration.matching_service import match_watchlist_for_boletin
+from scripts.orchestration.portfolio_sync import match_portfolio_by_identity
 from scripts.parsers import boletin_header
-from scripts.parsers.marca_entry import MarcaEntryParser, MarcaEntry, ParseStats
+from scripts.parsers.marca_entry import MarcaEntryParser, ParseStats
 
 
 # ── Resultado del pipeline ─────────────────────────────────────
@@ -305,6 +307,10 @@ def process_pdf(
         )
         entries, stats = parser.parse_with_stats(parser_text)
 
+        # Capa fuente neutral: persistir TODAS las marcas del boletín de forma
+        # estructurada, no solo las que matchean con watchlist/portfolio.
+        boletines_entries_replace(conn, boletin_id, entries)
+
         needs_hermes = any(
             p.get("has_images") or p.get("low_confidence") for p in parser_pages
         )
@@ -348,75 +354,43 @@ def process_pdf(
             entries_lema=stats.entries_lema,
         )
 
-        # ── Match contra watchlist ───────────────────────────
+        # ── Match compartido contra watchlists y portfolios ───
+        # Los boletines son comunes a todos los usuarios; cada usuario debe
+        # recibir detecciones según su propia watchlist y portfolio.
         _report_progress("matching")
-        watch = watchlist_list_for_user(conn, user_id, only_active=True)
-        watch_names = [w.name for w in watch]
-
-        # Solo entries matcheables participan en el matching.
         matcheable_entries = [e for e in entries if e.matcheable]
         candidate_names = [e.marca for e in matcheable_entries if e.marca]
-        candidate_classes = [e.clase_niza for e in matcheable_entries if e.marca]
-        watch_classes = [w.class_nice for w in watch]
         thresholds = combined.Thresholds.from_settings(
             cfg.match_threshold, cfg.fuzzy_threshold
         )
 
         detections_created = 0
 
-        # Indexar entries por nombre para enriquecer expediente/titular/etc.
-        entries_by_name: dict[str, MarcaEntry] = {}
-        for e in matcheable_entries:
-            if e.marca and e.marca not in entries_by_name:
-                entries_by_name[e.marca] = e
+        for target_user in users_list(conn):
 
-        watch_by_name = {w.name: w for w in watch}
-
-        if watch_names and candidate_names:
-            match_pairs = combined.find_matches(
-                watch_names, candidate_names, thresholds,
-                watch_class_nices=watch_classes,
-                candidate_class_nices=candidate_classes,
+            watch = watchlist_list_for_user(
+                conn, target_user.id, only_active=True
             )
-            for watch_name, candidate, mr in match_pairs:
-                entry = entries_by_name.get(candidate)
-                if not entry:
-                    continue
-                w = watch_by_name.get(watch_name)
-                if not w:
-                    continue
-                detections_add(
+            if watch and candidate_names:
+                detections_created += match_watchlist_for_boletin(
                     conn,
-                    boletin_id=boletin_id,
-                    user_id=user_id,
-                    watchlist_id=w.id,
-                    mark_name=candidate,
-                    similarity=mr.similarity,
-                    match_kind="similar",
-                    source="pdfplumber_text",
-                    confidence=mr.confidence,
-                    expediente=entry.expediente,
-                    titular=entry.titular,
-                    class_nice=entry.clase_niza,
-                    page=entry.page,
-                    raw_excerpt=entry.excerpt,
-                    pais=entry.pais,
-                    fecha_inscripcion=entry.fecha_inscripcion,
-                    fuente_parsing=entry.fuente_parsing,
-                    es_figura=1 if entry.es_figura else 0,
-                    es_lema=1 if entry.es_lema else 0,
+                    target_user.id,
+                    boletin_id,
+                    matcheable_entries,
+                    thresholds,
                 )
-                detections_created += 1
 
-        # ── Match contra portafolio propio (regla temporal + historial) ──
-        sync_result = verify_entries_for_user(
-            conn,
-            user_id,
-            boletines_get(conn, boletin_id),
-            entries,
-            source="pdfplumber_text",
-        )
-        detections_created += sync_result.matched
+            # Portfolio propio: identidad (#registro / #solicitud) +
+            # filtro de nombre. La regla temporal de actualización de
+            # estado ya no se aplica aquí (se gestiona por el flujo
+            # manual / importación Excel).
+            detections_created += match_portfolio_by_identity(
+                conn,
+                target_user.id,
+                boletin_id,
+                matcheable_entries,
+                source="pdfplumber_text",
+            )
 
         # ── Notificación por email (opcional) ─────────────────
         _report_progress("notifying")

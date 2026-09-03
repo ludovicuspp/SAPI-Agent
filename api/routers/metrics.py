@@ -44,7 +44,6 @@ async def metrics(
     # ── Volumen ────────────────────────────────────────────────────
     counts = {
         "users": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
-        "users_active": conn.execute("SELECT COUNT(*) FROM users WHERE active=1").fetchone()[0],
         "boletines_total": conn.execute("SELECT COUNT(*) FROM boletines").fetchone()[0],
         "boletines_por_status": {
             row["status"]: row["n"]
