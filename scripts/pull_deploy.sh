@@ -74,9 +74,12 @@ echo "Desplegando $HEAD_NOW ..."
 # las deps viven en ~/.local (user-site), de ahí --user --break-system-packages.
 python3 -m pip install --user --break-system-packages -q -r requirements.txt
 
-# Dashboard build (rebuild con .env.production que ya viene en el repo)
+# Dashboard build (rebuild con .env.production que ya viene en el repo).
+# OJO: se necesita `npm ci` COMPLETO (no --omit=dev): tsc y vite son
+# devDependencies y hacen falta para `npm run build` (tsc -b && vite build).
+# El dist/ resultante es estático; las devDeps no se usan en runtime.
 cd dashboard
-npm ci --omit=dev --silent
+npm ci --silent
 npm run build --silent
 cd ..
 
