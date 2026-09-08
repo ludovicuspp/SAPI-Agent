@@ -46,9 +46,41 @@ export async function request<T>(
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new ApiError(res.status, body.detail || "Error desconocido");
+    let detail = body.detail;
+    // FastAPI devuelve los 422 como array de {loc, msg, type}; normalizar
+    // a texto legible en lugar de dejar un objeto (que se renderiza "[object Object]").
+    if (Array.isArray(detail)) {
+      detail = detail.map((d) => d.msg ?? String(d)).join("; ");
+    } else if (typeof detail !== "string") {
+      detail = JSON.stringify(detail);
+    }
+    throw new ApiError(res.status, detail || "Error desconocido");
   }
   if (res.status === 204) return undefined as T;
+  return res.json();
+}
+
+export async function uploadFile<T>(
+  path: string,
+  file: File,
+): Promise<T> {
+  const token = getToken();
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  if (res.status === 401) {
+    clearToken();
+    window.location.href = "/login";
+    throw new ApiError(401, "No autorizado");
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new ApiError(res.status, body.detail || "Error desconocido");
+  }
   return res.json();
 }
 

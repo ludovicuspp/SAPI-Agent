@@ -26,7 +26,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       setToken(access_token);
       // Decode user from JWT payload (no network call needed)
       const payload = JSON.parse(atob(access_token.split(".")[1] ?? "")) as Record<string, unknown>;
-      set({ token: access_token, user: { id: Number(payload.sub ?? 0), email, role: (payload.role as "admin" | "agent") ?? "agent", active: true, created_at: "" } });
+      set({ token: access_token, user: { id: Number(payload.sub ?? 0), email, role: (payload.role as User["role"]) ?? "empresa", nombre: "", acciones: [], created_at: "" } });
     } finally {
       set({ loading: false });
     }
@@ -46,7 +46,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         clearToken();
         return;
       }
-      set({ token, user: { id: Number(payload.sub ?? 0), email: String(payload.email ?? ""), role: (payload.role as "admin" | "agent") ?? "agent", active: true, created_at: "" } });
+      set({ token, user: { id: Number(payload.sub ?? 0), email: String(payload.email ?? ""), role: (payload.role as User["role"]) ?? "empresa", nombre: "", acciones: [], created_at: "" } });
     } catch {
       clearToken();
     }

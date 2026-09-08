@@ -5,11 +5,13 @@ import { formatDate, statusLabel, statusColor, isHermesInProgress } from "@/lib/
 import { UploadZone } from "@/components/UploadZone";
 import { Button } from "@/components/ui/button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { useAuthStore } from "@/store/auth";
 import type { Boletin } from "@/types/api";
 
 export default function Boletines() {
   const [boletines, setBoletines] = useState<Boletin[]>([]);
   const navigate = useNavigate();
+  const isAdmin = useAuthStore((s) => s.user?.role === "admin");
 
   const load = () => request<Boletin[]>("/api/boletines").then(setBoletines).catch(console.error);
 
@@ -38,6 +40,7 @@ export default function Boletines() {
             <TableHead>No.</TableHead>
             <TableHead>Páginas</TableHead>
             <TableHead>Entries</TableHead>
+            {isAdmin && <TableHead>Subido por</TableHead>}
             <TableHead>Status</TableHead>
             <TableHead>Fecha</TableHead>
             <TableHead className="w-24"></TableHead>
@@ -67,6 +70,7 @@ export default function Boletines() {
                 <TableCell>{b.bulletin_number ?? "—"}</TableCell>
                 <TableCell>{b.pages ?? "…"}</TableCell>
                 <TableCell>{b.entries_matcheables}</TableCell>
+                {isAdmin && <TableCell>{b.uploaded_by_name ?? "—"}</TableCell>}
                 <TableCell>
                   <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${statusColor(b.status)}`}>
                     {statusLabel(b.status)}
@@ -95,7 +99,7 @@ export default function Boletines() {
           })}
           {boletines.length === 0 && (
             <TableRow>
-              <TableCell colSpan={7} className="text-center text-gray-500">
+              <TableCell colSpan={isAdmin ? 8 : 7} className="text-center text-gray-500">
                 No hay boletines
               </TableCell>
             </TableRow>

@@ -9,7 +9,6 @@ import {
 
 interface Metrics {
   users: number;
-  users_active: number;
   boletines_total: number;
   boletines_por_status: Record<string, number>;
   detections_total: number;
@@ -40,7 +39,7 @@ export default function MonitoringPage() {
   if (!data) return <div className="text-gray-500">Cargando…</div>;
 
   const kpis = [
-    { label: "Usuarios activos", value: `${data.users_active}/${data.users}`, icon: Users, color: "text-blue-600" },
+    { label: "Usuarios", value: data.users, icon: Users, color: "text-blue-600" },
     { label: "Boletines", value: data.boletines_total, icon: FileText, color: "text-brand-600" },
     { label: "Cola Hermes", value: data.hermes_queue, icon: GitBranch, color: "text-amber-600" },
     { label: "Detecciones", value: data.detections_total, icon: Search, color: "text-orange-600" },

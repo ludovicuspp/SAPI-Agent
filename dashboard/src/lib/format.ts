@@ -17,7 +17,7 @@ export function formatDateTime(iso: string | null): string {
 }
 
 export function formatSimilarity(score: number): string {
-  return `${Math.round(score)}%`;
+  return `${Math.round(score * 100)}%`;
 }
 
 export function formatClass(n: number | null): string {

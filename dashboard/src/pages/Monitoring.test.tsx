@@ -12,7 +12,6 @@ const mockRequest = request as unknown as ReturnType<typeof vi.fn>;
 
 const fakeMetrics = {
   users: 2,
-  users_active: 2,
   boletines_total: 3,
   boletines_por_status: { extracted: 2, failed: 1 },
   detections_total: 5,

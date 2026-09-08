@@ -1,17 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { request } from "@/lib/api";
 import { watchBoletinProgress } from "@/lib/ws";
-import { statusLabel, statusColor, stepLabel, isHermesInProgress } from "@/lib/format";
+import { statusLabel, statusColor, stepLabel, isHermesInProgress, formatClass } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import type { Boletin, BoletinProgress } from "@/types/api";
+import { Input } from "@/components/ui/input";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import type { Boletin, BoletinEntry, BoletinProgress } from "@/types/api";
 
 export default function BoletinDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [boletin, setBoletin] = useState<Boletin | null>(null);
   const [progress, setProgress] = useState<BoletinProgress | null>(null);
+  const [entries, setEntries] = useState<BoletinEntry[]>([]);
+  const [entryQuery, setEntryQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [selectedEntry, setSelectedEntry] = useState<BoletinEntry | null>(null);
+  const PAGE_SIZE = 50;
 
   useEffect(() => {
     if (!id) return;
@@ -45,6 +53,42 @@ export default function BoletinDetail() {
     return () => window.clearInterval(t);
   }, [boletin, id]);
 
+  // Cargar las marcas extraídas del boletín (capa fuente).
+  useEffect(() => {
+    if (!id) return;
+    request<BoletinEntry[]>(`/api/boletines/${id}/entries`)
+      .then(setEntries)
+      .catch(console.error);
+  }, [id]);
+
+  const filteredEntries = useMemo(() => {
+    const q = entryQuery.trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter((e) =>
+      [
+        e.marca,
+        e.titular,
+        e.expediente,
+        e.pais,
+        e.estatus,
+        e.productos_servicios,
+        e.class_nice != null ? String(e.class_nice) : "",
+      ].some((v) => v && v.toLowerCase().includes(q)),
+    );
+  }, [entries, entryQuery]);
+
+  // Paginación sobre el conjunto ya filtrado.
+  const entryTotalPages = Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE));
+  const safePage = Math.min(page, entryTotalPages);
+  const pageStart = (safePage - 1) * PAGE_SIZE;
+  const pageRows = filteredEntries.slice(pageStart, pageStart + PAGE_SIZE);
+
+  // Volver a la página 1 cuando cambia la búsqueda o se recargan las marcas,
+  // y corregir la página si excede el total (p.ej. tras filtrar).
+  useEffect(() => {
+    setPage((p) => Math.min(Math.max(1, p), Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE))));
+  }, [entryQuery, filteredEntries.length]);
+
   if (!boletin) return <div className="text-gray-500">Cargando…</div>;
 
   const isExtracting = boletin.status === "extracting" || progress?.status === "extracting";
@@ -61,6 +105,14 @@ export default function BoletinDetail() {
       : null;
 
   const hermesActive = isHermesInProgress(boletin);
+
+  const hermesStep = boletin.hermes_progress_step;
+  const hermesCurrent = boletin.hermes_progress_current_page;
+  const hermesTotal = boletin.hermes_progress_total_pages;
+  const hermesPct =
+    hermesTotal && hermesCurrent != null
+      ? Math.min(100, Math.round((hermesCurrent / hermesTotal) * 100))
+      : null;
 
   const handleDelete = async () => {
     if (!window.confirm(
@@ -117,9 +169,31 @@ export default function BoletinDetail() {
             </div>
             <p className="text-xs text-purple-700">
               El boletín tiene páginas con imágenes o encoding roto.
-              La cola de Hermes las está procesando con visión multimodal.
+              Hermes las está procesando con visión multimodal.
               Esta vista se actualiza automáticamente.
             </p>
+            {(hermesCurrent != null && hermesTotal != null) && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-xs text-purple-700">
+                  <span>
+                    {hermesStep === "done" ? "Completado" : "Hermes página a página"}
+                  </span>
+                  <span>
+                    Página {hermesCurrent} / {hermesTotal}
+                  </span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-purple-100">
+                  <div
+                    className="h-full rounded-full bg-purple-500 transition-[width] duration-300"
+                    style={{ width: hermesPct != null ? `${hermesPct}%` : "5%" }}
+                    data-testid="hermes-progress-bar"
+                  />
+                </div>
+                {hermesPct != null && hermesStep !== "done" && (
+                  <div className="text-xs text-purple-700">{hermesPct}% completado</div>
+                )}
+              </div>
+            )}
             {boletin.entries_hermes_pending > 0 && (
               <p className="text-xs text-purple-700">
                 {boletin.entries_hermes_pending} entradas pendientes de revisión visual.
@@ -151,6 +225,158 @@ export default function BoletinDetail() {
           </div>
         </Card>
       </div>
+
+      {boletin.status === "extracted" && (
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Marcas extraídas</h2>
+                <p className="text-xs text-gray-500">
+                  Todas las marcas del boletín (no solo las que coinciden con tu
+                  watchlist / portfolio).
+                </p>
+              </div>
+              <Input
+                placeholder="Buscar marca, titular, expediente, país, clase…"
+                value={entryQuery}
+                onChange={(e) => setEntryQuery(e.target.value)}
+                className="max-w-xs"
+                aria-label="Buscar marcas"
+              />
+            </div>
+
+            <div className="text-sm text-gray-600">
+              Mostrando {filteredEntries.length === 0 ? 0 : pageStart + 1}–
+              {pageStart + pageRows.length} de {filteredEntries.length} marcas
+            </div>
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Marca</TableHead>
+                  <TableHead>Expediente</TableHead>
+                  <TableHead>Titular</TableHead>
+                  <TableHead>Clase</TableHead>
+                  <TableHead>País</TableHead>
+                  <TableHead>Productos / Servicios</TableHead>
+                  <TableHead>Estatus</TableHead>
+                  <TableHead>Página</TableHead>
+                  <TableHead>Tipo</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pageRows.map((e) => (
+                  <TableRow
+                    key={e.id}
+                    className="cursor-pointer"
+                    onClick={() => setSelectedEntry(e)}
+                  >
+                    <TableCell className="font-medium">{e.marca ?? "—"}</TableCell>
+                    <TableCell>{e.expediente}</TableCell>
+                    <TableCell>{e.titular ?? "—"}</TableCell>
+                    <TableCell>{formatClass(e.class_nice)}</TableCell>
+                    <TableCell>{e.pais ?? "—"}</TableCell>
+                    <TableCell className="max-w-xs">
+                      <span className="line-clamp-2">
+                        {e.productos_servicios || "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell>{e.estatus ?? "—"}</TableCell>
+                    <TableCell>{e.page ?? "—"}</TableCell>
+                    <TableCell>
+                      {e.is_lema && <Badge variant="secondary">Lema</Badge>}
+                      {e.is_figura && <Badge variant="outline">Figura</Badge>}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {filteredEntries.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={9} className="text-center text-gray-500">
+                      No hay marcas que coincidan
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+
+            {filteredEntries.length > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-gray-500">
+                  Página {safePage} de {entryTotalPages}
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={safePage <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    ‹ Anterior
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={safePage >= entryTotalPages}
+                    onClick={() => setPage((p) => Math.min(entryTotalPages, p + 1))}
+                  >
+                    Siguiente ›
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {selectedEntry && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setSelectedEntry(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-4 text-xl font-bold">{selectedEntry.marca ?? "Marca"}</h2>
+            <dl className="grid grid-cols-2 gap-2 text-sm">
+              <dt className="text-gray-500">Expediente:</dt><dd>{selectedEntry.expediente}</dd>
+              <dt className="text-gray-500">Titular:</dt><dd>{selectedEntry.titular ?? "—"}</dd>
+              <dt className="text-gray-500">Clase:</dt><dd>{formatClass(selectedEntry.class_nice)}</dd>
+              <dt className="text-gray-500">País:</dt><dd>{selectedEntry.pais ?? "—"}</dd>
+              <dt className="text-gray-500">Estatus:</dt><dd>{selectedEntry.estatus ?? "—"}</dd>
+              <dt className="text-gray-500">Página:</dt><dd>{selectedEntry.page ?? "—"}</dd>
+              {(selectedEntry.is_lema || selectedEntry.is_figura) && (
+                <>
+                  <dt className="text-gray-500">Tipo:</dt>
+                  <dd>
+                    {[selectedEntry.is_lema && "Lema", selectedEntry.is_figura && "Figurativa"]
+                      .filter(Boolean)
+                      .join(" / ")}
+                  </dd>
+                </>
+              )}
+            </dl>
+            <div className="mt-4">
+              <div className="text-sm text-gray-500">Productos / Servicios</div>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">
+                {selectedEntry.productos_servicios || "—"}
+              </p>
+            </div>
+            {selectedEntry.excerpt && (
+              <pre className="mt-4 max-h-60 overflow-auto rounded bg-gray-50 p-3 text-xs text-gray-700 whitespace-pre-wrap">
+                {selectedEntry.excerpt}
+              </pre>
+            )}
+            <button
+              onClick={() => setSelectedEntry(null)}
+              className="mt-4 text-sm text-brand-600 hover:underline"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
 
       {boletin.error && (
         <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">{boletin.error}</div>

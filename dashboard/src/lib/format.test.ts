@@ -19,10 +19,11 @@ describe("formatDateTime", () => {
 });
 
 describe("formatSimilarity", () => {
-  it("rounds to integer percentage", () => {
-    expect(formatSimilarity(92.4)).toBe("92%");
-    expect(formatSimilarity(92.6)).toBe("93%");
-    expect(formatSimilarity(100)).toBe("100%");
+  it("rounds fraction to integer percentage", () => {
+    expect(formatSimilarity(0.924)).toBe("92%");
+    expect(formatSimilarity(0.926)).toBe("93%");
+    expect(formatSimilarity(1.0)).toBe("100%");
+    expect(formatSimilarity(0)).toBe("0%");
   });
 });
 
