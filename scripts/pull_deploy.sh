@@ -69,8 +69,10 @@ fi
 
 echo "Desplegando $HEAD_NOW ..."
 
-# Backend deps (idempotente, rápido si no cambian)
-python3 -m pip install -q -r requirements.txt
+# Backend deps (idempotente, rápido si no cambian).
+# Debian marca el python3 del sistema como "externally-managed" (PEP 668):
+# las deps viven en ~/.local (user-site), de ahí --user --break-system-packages.
+python3 -m pip install --user --break-system-packages -q -r requirements.txt
 
 # Dashboard build (rebuild con .env.production que ya viene en el repo)
 cd dashboard
