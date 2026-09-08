@@ -82,7 +82,7 @@ SMTP ausente: `send-digest` imprime el HTML y no envía.
 ## Hermes `sapi-monitor`
 
 Directorio con guion: **ejecutar como archivo**, no como paquete.
-Bootstrap de `sys.path` en `scripts/_bootstrap.py`.
+Bootstrap de `sys.path` en `hermes/skills/sapi-monitor/scripts/_bootstrap.py`.
 
 ```bash
 python hermes/skills/sapi-monitor/scripts/pending_boletines.py [--db data/sapi.db]
