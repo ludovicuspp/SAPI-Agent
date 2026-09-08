@@ -24,6 +24,11 @@
 #  4) Solo si el health pasa, escribe el marcador con el HEAD desplegado
 set -euo pipefail
 
+# El systemd user service arranca con un PATH mínimo; node/npm/pip3 viven
+# en ~/.local/bin. Forzamos el PATH para que el build no falle con
+# "command not found" al dispararse desde el timer.
+export PATH="/home/luisv/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
 REPO_DIR="/home/luisv/SAPI-Agent"
 LOG_FILE="/var/log/sapi-pull.log"
 LOCK_FILE="/home/luisv/data/sapi-pull.lock"
@@ -65,7 +70,7 @@ fi
 echo "Desplegando $HEAD_NOW ..."
 
 # Backend deps (idempotente, rápido si no cambian)
-python -m pip install -q -r requirements.txt
+python3 -m pip install -q -r requirements.txt
 
 # Dashboard build (rebuild con .env.production que ya viene en el repo)
 cd dashboard
