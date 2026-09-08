@@ -56,6 +56,14 @@ antes de enviar.
 
 ### 2. Por cada boletín pendiente
 
+0. **Reporta el inicio** del análisis para que la UI vea progreso:
+
+   ```bash
+   python hermes/skills/sapi-monitor/scripts/progress.py \
+     --boletin-id <ID> --step analyzing_page \
+     --current-page <1> --total-pages <total_pages>
+   ```
+
 1. Lee el `extraction_json` (páginas con `has_images` y
    `low_confidence`) que dejó el parser en la BD:
    ```bash
@@ -73,6 +81,17 @@ antes de enviar.
      python hermes/skills/sapi-monitor/scripts/extract_page.py --pdf <file_path> --page N --render <tmp_dir>
      ```
      y luego analízala con tu canal de visión sobre el PNG generado.
+
+   **A medida que avanzas**, actualiza el progreso tras cada página
+   procesada (o al menos cada pocas páginas para no gastar pasos):
+   ```bash
+   python hermes/skills/sapi-monitor/scripts/progress.py \
+     --boletin-id <ID> --step analyzing_page \
+     --current-page <N_actual> --total-pages <total_pages>
+   ```
+   La UI mostrará "Hermes … página N de M". Si el análisis falla
+   irrecuperablemente, reporta ``--step failed``.
+
 3. Normaliza cada entrada al esquema `StructuredEntryIn`:
 
 ```json
@@ -121,11 +140,28 @@ El endpoint:
 - Calcula la similitud contra **todas** las watchlists activas
   (multi-tenant) y contra los portafolios por expediente.
 - Crea las `detections` correspondientes.
-- Fija `hermes_processed_at`, de modo que un boletín no se vuelve a
-  procesar.
+- Fija `hermes_processed_at` y pone `hermes_progress_step='done'`, de modo
+  que un boletín no se vuelve a procesar.
 
 **No** calcules similitudes ni filtres por usuario desde la skill:
 eso lo hace la API (SOUL.md: "no calculo similitud fonética/fuzzy").
+
+### 4. Cierre del boletín (siempre)
+
+Después de entregar las entries **o** si determinaste que el boletín **no
+requiere visión** (texto confiable que el parser Python ya cubrió), cierra
+el boletín para que salga de la cola y no quede pendiente para siempre:
+
+```bash
+python hermes/skills/sapi-monitor/scripts/done.py --boletin-id <ID> [--entries-added N]
+```
+
+- Si entregaste entries, pasa el número total con ``--entries-added``.
+- Si fue un **no-op** (sin vision), cierra igual con ``done.py`` SIN
+  entries: el endpoint fija ``hermes_processed_at`` + ``step='done'``.
+- Idempotente: cerrar dos veces no crea duplicados. El propio
+  ``submit.py`` ya marca ``hermes_processed_at``; ``done.py`` cubre el
+  caso sin entries y sirve también de red de seguridad.
 
 ## Monitoreo periódico con cron (patrón watchdog)
 

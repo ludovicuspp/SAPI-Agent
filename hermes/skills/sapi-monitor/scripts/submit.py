@@ -23,7 +23,7 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
-from _bootstrap import setup_paths
+from _bootstrap import setup_paths, repo_root, load_repo_env
 
 setup_paths()
 
@@ -103,8 +103,14 @@ def submit(
     exponer ``post(url, json=..., headers=...) -> .status_code, .json()``
     (por defecto usa la stdlib).
     """
-    api_url = api_url or os.environ.get("HERMES_API_URL", "http://localhost:8000")
-    service_token = service_token or os.environ.get("SERVICE_TOKEN_HERMES", "")
+    load_repo_env(repo_root())
+    # Solo se recurre al env cuando el parámetro no se pasó (``None``); un
+    # ``""`` explícito se respeta como "sin token" y dispara el error, sin
+    # que el .env del repo lo enmascare (importante para los tests).
+    if api_url is None:
+        api_url = os.environ.get("HERMES_API_URL", "http://localhost:8000")
+    if service_token is None:
+        service_token = os.environ.get("SERVICE_TOKEN_HERMES", "")
 
     if not service_token:
         raise ValueError("SERVICE_TOKEN_HERMES no está configurado")

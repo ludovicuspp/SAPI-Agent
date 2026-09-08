@@ -42,3 +42,35 @@ def setup_paths() -> Path:
 def repo_db_path() -> Path:
     """Ruta por defecto a ``data/sapi.db``."""
     return repo_root() / "data" / "sapi.db"
+
+
+_HERMES_ENV_LOADED = False
+
+
+def load_repo_env(root: Path | None = None) -> None:
+    """Carga selectivamente ``<repo>/.env`` para las variables del agente
+    cuando no están ya en el entorno.
+
+    El agente Hermes corre en el ``--workdir`` del repo pero sin el env
+    exportado; los scripts de la skill (``progress.py``, ``submit.py``)
+    necesitan ``HERMES_API_URL`` y ``SERVICE_TOKEN_HERMES`` para hablar con
+    la API. Esto no reemplaza valores ya presentes en ``os.environ``.
+    """
+    global _HERMES_ENV_LOADED
+    if _HERMES_ENV_LOADED:
+        return
+    import os
+
+    root = root or repo_root()
+    env_path = root / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'\"").rstrip()
+            if key in {"HERMES_API_URL", "SERVICE_TOKEN_HERMES"} and not os.environ.get(key):
+                os.environ[key] = value
+    _HERMES_ENV_LOADED = True
