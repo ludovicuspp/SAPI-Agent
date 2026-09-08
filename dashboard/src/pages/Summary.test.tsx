@@ -24,6 +24,17 @@ describe("Summary page", () => {
     expect(screen.getByText("Cargando…")).toBeDefined();
   });
 
+  it("shows the API error instead of loading forever", async () => {
+    mockRequest.mockRejectedValue(new Error("Token ausente"));
+    render(
+      <MemoryRouter>
+        <SummaryPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Token ausente");
+    expect(screen.getByRole("button", { name: "Reintentar" })).toBeDefined();
+  });
+
   it("renders KPIs after load", async () => {
     mockRequest.mockResolvedValue({
       watchlist_count: 5,

@@ -9,12 +9,57 @@ import { FileText, Search, ListChecks, Briefcase } from "lucide-react";
 
 export default function SummaryPage() {
   const [data, setData] = useState<Summary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    request<Summary>("/api/summary").then(setData).catch(console.error);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+
+    setLoading(true);
+    setError(null);
+    request<Summary>("/api/summary", { signal: controller.signal })
+      .then(setData)
+      .catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") {
+          setError("El resumen tardó demasiado en responder. Intenta de nuevo.");
+        } else if (reason instanceof Error) {
+          setError(reason.message || "No se pudo cargar el resumen.");
+        } else {
+          setError("No se pudo cargar el resumen.");
+        }
+        console.error("No se pudo cargar /api/summary", reason);
+      })
+      .finally(() => {
+        window.clearTimeout(timeout);
+        setLoading(false);
+      });
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, []);
 
-  if (!data) return <div className="text-gray-500">Cargando…</div>;
+  if (loading) return <div className="text-gray-500">Cargando…</div>;
+
+  if (error || !data) {
+    return (
+      <div className="space-y-3">
+        <h1 className="text-2xl font-bold">Resumen</h1>
+        <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-4 text-red-700">
+          <p>{error ?? "No se pudo cargar el resumen."}</p>
+          <button
+            type="button"
+            className="mt-3 rounded-md bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-800"
+            onClick={() => window.location.reload()}
+          >
+            Reintentar
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const kpis = [
     { label: "Watchlist", value: data.watchlist_count, icon: ListChecks, color: "text-blue-600" },
