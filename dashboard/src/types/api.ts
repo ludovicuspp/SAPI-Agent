@@ -14,6 +14,8 @@ export interface User {
   created_at: string;
 }
 
+export type WatchlistKind = "marca" | "titular";
+
 export interface Watchlist {
   id: number;
   user_id: number;
@@ -21,6 +23,8 @@ export interface Watchlist {
   class_nice: number | null;
   notes: string | null;
   productos_servicios: string | null;
+  match_family: boolean;
+  kind: WatchlistKind;
   active: boolean;
   created_at: string;
 }
@@ -108,7 +112,7 @@ export interface Boletin {
   hermes_progress_updated_at: string | null;
 }
 
-export type MatchKind = "similar" | "own_status";
+export type MatchKind = "similar" | "own_status" | "conflict";
 export type Source = "pdfplumber_text" | "hermes_llm" | "hermes_vision";
 export type Confidence = "high" | "medium" | "low";
 
@@ -125,6 +129,7 @@ export interface Detection {
   page: number | null;
   similarity: number;
   match_kind: MatchKind;
+  risk_score: number | null;
   source: Source;
   confidence: Confidence;
   raw_excerpt: string | null;

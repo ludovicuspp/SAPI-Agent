@@ -152,6 +152,8 @@ def cmd_add_watchlist(args):
             class_nice=args.class_nice,
             notes=args.notes,
             productos_servicios=args.productos_servicios,
+            match_family=1 if args.match_family else 0,
+            kind=args.kind,
         )
         conn.commit()
         res = analyze_boletines_for_user(conn, user.id)
@@ -477,6 +479,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--notes")
     s.add_argument("--productos-servicios", "--distingue", dest="productos_servicios",
                    help="Productos/servicios vigilados (texto PARA DISTINGUIR)")
+    s.add_argument("--match-family", action="store_true", default=False,
+                   help="Detecta familias (DRAGON ← DRAGON WINCH)")
+    s.add_argument("--kind", choices=["marca", "titular"], default="marca",
+                   help="Tipo de vigilancia: 'marca' (default) o 'titular' "
+                        "(nombre = titular/competidor a vigilar)")
 
     s = sub.add_parser("list-watchlist", help="Lista la watchlist del usuario.")
     s.add_argument("--user-email", required=True)

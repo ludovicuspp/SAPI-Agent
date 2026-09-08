@@ -9,8 +9,14 @@ import sqlite3
 from scripts import db
 from scripts.config import get_settings
 from scripts.matcher import combined
-from scripts.matcher.distinguish import products_intersect
-from scripts.orchestration.portfolio_sync import match_portfolio_by_identity
+from scripts.orchestration.portfolio_sync import (
+    match_portfolio_by_identity,
+    match_portfolio_conflicts,
+)
+from scripts.orchestration.matching_service import (
+    watch_entry_matches,
+    watch_titular_matches,
+)
 from scripts.schemas import (
     HermesDoneIn,
     HermesDoneOut,
@@ -29,7 +35,8 @@ _MAX_MATCHES_PER_ENTRY = 5
 
 def _hermes_to_entry_like(entry):
     """Adapta ``StructuredEntryIn`` al duck-type esperado por
-    ``match_portfolio_by_identity`` (usa ``getattr`` con defaults)."""
+    ``match_portfolio_by_identity`` y ``match_portfolio_conflicts``
+    (usan ``getattr`` con defaults)."""
     from types import SimpleNamespace
 
     return SimpleNamespace(
@@ -44,6 +51,7 @@ def _hermes_to_entry_like(entry):
         excerpt=getattr(entry, "excerpt", None),
         es_figura=False,
         es_lema=False,
+        productos_servicios=getattr(entry, "productos_servicios", None),
     )
 
 
@@ -78,45 +86,47 @@ async def submit_structured(
 
         # Buscar matches contra TODAS las watchlists activas (multi-tenant).
         # Regla AND: nombre (similitud ≥ fuzzy) + clase Niza igual +
-        # distingue con intersección de tokens. Cap top-N por similitud
-        # para evitar explosión (entradas alucinadas con muchas
-        # watchlists no deben generar miles de detections).
+        # distingue con intersección de tokens. Watchlists ``kind='titular'``
+        # comparan el titular de la entry. Cap top-N por similitud para
+        # evitar explosión (entradas alucinadas con muchas watchlists no
+        # deben generar miles de detections).
         watch_candidates: list[tuple] = []
         for user in db.users_list(conn):
             user_watch = db.watchlist_list_for_user(conn, user.id, only_active=True)
             for w in user_watch:
-                # Sin clases: el motor `combined` solo evalúa el nombre.
-                mr = combined.score_pair(
-                    w.name, entry.marca, thresholds,
-                )
-                if not mr.is_match:
+                if w.kind == "titular":
+                    if watch_titular_matches(w, entry):
+                        watch_candidates.append((1.0, user.id, w, None))
                     continue
-                # Regla de clase Niza.
-                wc = w.class_nice
-                ec = entry.clase_niza
-                if wc is not None and ec is not None and wc != ec:
-                    continue
-                # Regla de distingue (fallback a nombre+clase si falta).
-                entry_distinguish = getattr(entry, "productos_servicios", None)
-                watch_distinguish = getattr(w, "productos_servicios", None)
-                overlap = products_intersect(watch_distinguish, entry_distinguish)
-                if overlap is False:
-                    continue
-                watch_candidates.append((mr.similarity, user.id, w, mr))
+                name_sim = watch_entry_matches(w, entry, thresholds)
+                if name_sim is not None:
+                    watch_candidates.append((name_sim.name_sim, user.id, w, name_sim))
 
         watch_candidates.sort(key=lambda t: t[0], reverse=True)
-        for _sim, user_id, w, mr in watch_candidates[:_MAX_MATCHES_PER_ENTRY]:
+        for _sim, user_id, w, name_sim in watch_candidates[:_MAX_MATCHES_PER_ENTRY]:
+            if w.kind == "titular":
+                similarity, confidence, matched_with = 1.0, "high", f"titular:{w.name}"
+            else:
+                similarity = name_sim.name_sim if name_sim is not None else 0.0
+                confidence = "high" if similarity >= 0.95 else "medium"
+                matched_with = w.name
             db.detections_add(
                 conn,
                 boletin_id=boletin_id,
                 user_id=user_id,
                 watchlist_id=w.id,
                 mark_name=entry.marca,
-                similarity=mr.similarity,
-                match_kind="similar",
+                similarity=similarity,
+                match_kind=(
+                    "conflict"
+                    if w.kind == "titular"
+                    or (name_sim is not None and name_sim.is_family)
+                    else "similar"
+                ),
+                risk_score=None,
                 source=entry.fuente,
-                confidence=entry.confianza,
-                matched_with=w.name,
+                confidence=confidence,
+                matched_with=matched_with,
                 expediente=entry.expediente,
                 titular=entry.titular,
                 class_nice=entry.clase_niza,
@@ -133,14 +143,23 @@ async def submit_structured(
             entries_added += 1
 
         # Match contra portafolios de TODOS los usuarios (multi-tenant)
-        # por identidad (#registro / #solicitud) + filtro de nombre.
-        # Hermes refina el expediente; aquí usamos el de la entry.
+        # por identidad (#registro / #solicitud) + filtro de nombre, y
+        # conflicto/competencia (nombre + clase relacionada, excluyendo
+        # al propio titular). Con la entry adaptada a duck-type.
+        entry_like = _hermes_to_entry_like(entry)
         for user in db.users_list(conn):
             entries_added += match_portfolio_by_identity(
                 conn,
                 user.id,
                 boletin_id,
-                [_hermes_to_entry_like(entry)],
+                [entry_like],
+                source=entry.fuente,
+            )
+            entries_added += match_portfolio_conflicts(
+                conn,
+                user.id,
+                boletin_id,
+                [entry_like],
                 source=entry.fuente,
             )
 

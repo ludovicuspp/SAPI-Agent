@@ -162,6 +162,69 @@ class TestMigrationRoleCheck:
         conn.close()
 
 
+class TestMigrationMatchKindConflict:
+    """Migración del CHECK de ``detections.match_kind`` para añadir
+    ``'conflict'`` y la columna ``risk_score`` en BD existentes.
+
+    ``detections`` es tabla hoja; la reconstrucción 12-step con
+    ``legacy_alter_table=ON`` / ``foreign_keys=OFF`` no debe perder datos
+    ni dejar una ``detections_legacy`` sobrante.
+    """
+
+    def _make_old_db_with_detections(self, path):
+        """BD con la Fase 2 (CHECK similar/own_status + sin risk_score)."""
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            db.SCHEMA_SQL.replace(
+                "CHECK (match_kind IN ('similar','own_status','conflict')),",
+                "CHECK (match_kind IN ('similar','own_status')),",
+            ).replace("    risk_score REAL,\n", "")
+        )
+        conn.execute(
+            "INSERT INTO users (email, password_hash, role) VALUES ('a@x.c','h','admin')"
+        )
+        conn.execute(
+            "INSERT INTO boletines (uploaded_by, filename, file_path, file_sha256) VALUES (1, 'f.pdf', '/f.pdf', 's')"
+        )
+        conn.execute(
+            "INSERT INTO detections "
+            "(boletin_id, user_id, mark_name, similarity, match_kind, source, confidence) "
+            "VALUES (1, 1, 'DRAGON', 0.9, 'similar', 'pdfplumber_text', 'high')"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_matches_conflict_and_keeps_data(self, tmp_path):
+        f = tmp_path / "old.db"
+        self._make_old_db_with_detections(f)
+        db.init_db(f)
+
+        conn = db.connect(f)
+        # Datos conservados.
+        row = conn.execute(
+            "SELECT mark_name, match_kind, similarity FROM detections"
+        ).fetchone()
+        assert row["mark_name"] == "DRAGON"
+        assert row["match_kind"] == "similar"
+        # Columna risk_score presente.
+        cols = {c[1] for c in conn.execute("PRAGMA table_info(detections)")}
+        assert "risk_score" in cols
+        # El CHECK admite 'conflict'.
+        conn.execute(
+            "INSERT INTO detections "
+            "(boletin_id, user_id, mark_name, similarity, match_kind, source, confidence, risk_score) "
+            "VALUES (1, 1, 'RIVAL', 0.85, 'conflict', 'pdfplumber_text', 'high', 0.7)"
+        )
+        # Sin tabla legacy sobrante.
+        assert (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='detections_legacy'"
+            ).fetchone()
+            is None
+        )
+        conn.close()
+
+
 class TestUsers:
     def test_create_and_get(self, tmp_db):
         uid = db.users_create(

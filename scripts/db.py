@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS watchlist (
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     productos_servicios TEXT,
+    match_family INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'marca'
+        CHECK (kind IN ('marca','titular')),
     UNIQUE(user_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id);
@@ -167,7 +170,8 @@ CREATE TABLE IF NOT EXISTS detections (
     page INTEGER,
     similarity REAL NOT NULL,
     match_kind TEXT NOT NULL
-        CHECK (match_kind IN ('similar','own_status')),
+        CHECK (match_kind IN ('similar','own_status','conflict')),
+    risk_score REAL,
     source TEXT NOT NULL
         CHECK (source IN ('pdfplumber_text','hermes_llm','hermes_vision')),
     confidence TEXT NOT NULL
@@ -286,6 +290,9 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("portfolio", "productos_servicios", "TEXT"),
         ("portfolio", "comentarios", "TEXT"),
         ("watchlist", "productos_servicios", "TEXT"),
+        ("watchlist", "match_family", "INTEGER NOT NULL DEFAULT 0"),
+        ("watchlist", "kind", "TEXT NOT NULL DEFAULT 'marca'"),
+        ("detections", "risk_score", "REAL"),
         ("portfolio", "last_boletin_id", "INTEGER"),
         ("portfolio", "last_boletin_period", "TEXT"),
         ("portfolio", "updated_at", "TEXT NOT NULL DEFAULT ''"),
@@ -301,6 +308,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
     _migrate_users_drop_active(conn)
     _migrate_boletines_uploaded_by_nullable(conn)
     _migrate_users_role_check(conn)
+    _migrate_detections_match_kind_conflict(conn)
     _backfill_detections_matched_with(conn)
     # Índices por identidad (registro / solicitud) tras garantizar columnas.
     # Se hace aquí para que funcione en BD viejas que aún no tengan la
@@ -559,6 +567,105 @@ def _migrate_users_role_check(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_detections_match_kind_conflict(conn: sqlite3.Connection) -> None:
+    """Amplía el CHECK de ``match_kind`` de la tabla ``detections`` con el
+    valor ``'conflict'`` en BD existentes.
+
+    SQLite no permite ``ALTER CONSTRAINT``, así que se reconstruye la
+    tabla (patrón 12-step). ``detections`` es una tabla hoja (ninguna
+    otra tabla la referencia como FK), así que la reconstrucción no
+    requiere reparar tablas hijas. Se usa ``legacy_alter_table=ON`` /
+    ``foreign_keys=OFF`` por consistencia con el resto del migrador.
+    Idempotente: si el CHECK ya incluye ``'conflict'`` y no queda copia
+    ``detections_legacy``, no hace nada.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='detections'"
+    ).fetchone()
+    create_sql = row[0] if row else None
+    legacy_exists = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='detections_legacy'"
+        ).fetchone()
+        is not None
+    )
+    already_new = create_sql is not None and "conflict" in create_sql
+
+    # La tabla aún no existe: la creará SCHEMA_SQL después con el CHECK ampliado.
+    if create_sql is None:
+        return
+
+    if already_new and not legacy_exists:
+        return
+
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_detections_user ON detections(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_detections_boletin ON detections(boletin_id)",
+        "CREATE INDEX IF NOT EXISTS idx_detections_watchlist ON detections(watchlist_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_dedupe "
+        "ON detections(boletin_id, expediente, watchlist_id)",
+        "CREATE INDEX IF NOT EXISTS idx_detections_boletin_exp "
+        "ON detections(boletin_id, expediente)",
+    ]
+    new_create = (
+        "CREATE TABLE detections (\n"
+        "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "    boletin_id INTEGER NOT NULL REFERENCES boletines(id) ON DELETE CASCADE,\n"
+        "    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n"
+        "    watchlist_id INTEGER REFERENCES watchlist(id) ON DELETE CASCADE,\n"
+        "    portfolio_id INTEGER REFERENCES portfolio(id) ON DELETE CASCADE,\n"
+        "    expediente TEXT,\n"
+        "    mark_name TEXT NOT NULL,\n"
+        "    titular TEXT,\n"
+        "    class_nice INTEGER,\n"
+        "    page INTEGER,\n"
+        "    similarity REAL NOT NULL,\n"
+        "    match_kind TEXT NOT NULL "
+        "CHECK (match_kind IN ('similar','own_status','conflict')),\n"
+        "    risk_score REAL,\n"
+        "    source TEXT NOT NULL "
+        "CHECK (source IN ('pdfplumber_text','hermes_llm','hermes_vision')),\n"
+        "    confidence TEXT NOT NULL "
+        "CHECK (confidence IN ('high','medium','low')),\n"
+        "    raw_excerpt TEXT,\n"
+        "    matched_with TEXT,\n"
+        "    detected_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+        "    needs_hermes_reverify INTEGER NOT NULL DEFAULT 0,\n"
+        "    notified_email INTEGER NOT NULL DEFAULT 0,\n"
+        "    notified_at TEXT,\n"
+        "    pais TEXT,\n"
+        "    fecha_inscripcion TEXT,\n"
+        "    fuente_parsing TEXT,\n"
+        "    es_figura INTEGER NOT NULL DEFAULT 0,\n"
+        "    es_lema INTEGER NOT NULL DEFAULT 0\n"
+        ");"
+    )
+
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        if not already_new:
+            conn.execute("ALTER TABLE detections RENAME TO detections_legacy")
+            conn.execute(new_create)
+            new_cols = {c[1] for c in conn.execute("PRAGMA table_info(detections)")}
+            old_cols = ", ".join(
+                c[1]
+                for c in conn.execute("PRAGMA table_info(detections_legacy)")
+                if c[1] in new_cols
+            )
+            conn.execute(
+                f"INSERT INTO detections ({old_cols}) "
+                f"SELECT {old_cols} FROM detections_legacy"
+            )
+            conn.execute("DROP TABLE detections_legacy")
+        for idx_sql in indexes:
+            conn.execute(idx_sql)
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+
+
 @contextmanager
 def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """Context manager para transacciones explícitas."""
@@ -705,6 +812,8 @@ class WatchlistRow:
     active: int
     created_at: str
     productos_servicios: Optional[str] = None
+    match_family: int = 0
+    kind: str = "marca"
 
 
 def _watchlist_from_row(row: sqlite3.Row) -> WatchlistRow:
@@ -719,11 +828,14 @@ def watchlist_add(
     notes: Optional[str] = None,
     *,
     productos_servicios: Optional[str] = None,
+    match_family: int = 0,
+    kind: str = "marca",
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO watchlist(user_id, name, class_nice, notes, productos_servicios)"
-        " VALUES (?,?,?,?,?)",
-        (user_id, name, class_nice, notes, productos_servicios),
+        "INSERT INTO watchlist(user_id, name, class_nice, notes,"
+        " productos_servicios, match_family, kind)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (user_id, name, class_nice, notes, productos_servicios, match_family, kind),
     )
     return cur.lastrowid
 
@@ -1558,6 +1670,7 @@ class DetectionRow:
     es_lema: int = 0
     needs_hermes_reverify: int = 0
     matched_with: Optional[str] = None
+    risk_score: Optional[float] = None
 
 
 def _detection_from_row(row: sqlite3.Row) -> DetectionRow:
@@ -1589,14 +1702,16 @@ def detections_add(
     fuente_parsing: Optional[str] = None,
     es_figura: int = 0,
     es_lema: int = 0,
+    risk_score: Optional[float] = None,
 ) -> int:
     cur = conn.execute(
         "INSERT OR IGNORE INTO detections("
         " boletin_id, user_id, watchlist_id, portfolio_id,"
         " expediente, mark_name, titular, class_nice, page,"
         " similarity, match_kind, source, confidence, raw_excerpt,"
-        " matched_with, pais, fecha_inscripcion, fuente_parsing, es_figura, es_lema)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " matched_with, pais, fecha_inscripcion, fuente_parsing, es_figura, es_lema,"
+        " risk_score)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             boletin_id,
             user_id,
@@ -1618,6 +1733,7 @@ def detections_add(
             fuente_parsing,
             es_figura,
             es_lema,
+            risk_score,
         ),
     )
     return cur.lastrowid

@@ -43,11 +43,17 @@ CLASE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# `PARA DISTINGUIR: <descripción>` (productos/servicios). Corta al primer
-# salto de línea y limpia ruido de maquetación.
+# `PARA DISTINGUIR: <descripción>` (productos/servicios). La descripción
+# puede ocupar N líneas (lista de productos) hasta: línea en blanco,
+# la siguiente entrada (`Insc.`), o el comienzo de otro campo
+# (`SOLICITADA`, `TRAMITANTE`, `NOMBRE DE LA MARCA`, `DESCRIPCION`, ...).
 DISTINGUIR_RE = re.compile(
-    r"PARA\s+DISTINGUIR\s*:\s*(?P<distinguir>[^\n]+)",
-    re.IGNORECASE,
+    r"PARA\s+DISTINGUIR\s*:\s*"
+    r"(?P<distinguir>"
+    r"(?:(?!^\s*(?:\n|SOLICITADA|TRAMITANTE|DESCRIPCION|"
+    r"NOMBRE\s+DE\s+LA\s+MARCA|DOMICILIO|EN\s+CLASE|PA[ÍI]S\s*:|"
+    r"INSC\.?\s+\d{4}-))[^\n]*\n?)+)",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # `País: <nombre>` con tolerancia a saltos de línea.

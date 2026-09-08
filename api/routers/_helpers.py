@@ -58,6 +58,8 @@ def watchlist_to_out(r: db.WatchlistRow) -> WatchlistOut:
         class_nice=r.class_nice,
         notes=r.notes,
         productos_servicios=getattr(r, "productos_servicios", None),
+        match_family=bool(getattr(r, "match_family", 0)),
+        kind=getattr(r, "kind", "marca"),
         active=bool(r.active),
         created_at=r.created_at,
     )
@@ -160,6 +162,7 @@ def detection_to_out(r: db.DetectionRow) -> DetectionOut:
         page=r.page,
         similarity=r.similarity,
         match_kind=r.match_kind,
+        risk_score=getattr(r, "risk_score", None),
         source=r.source,
         confidence=r.confidence,
         raw_excerpt=r.raw_excerpt,

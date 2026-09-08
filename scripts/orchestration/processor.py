@@ -49,7 +49,10 @@ from scripts.extractors import pdf_meta, pdf_batch
 from scripts.matcher import combined
 from scripts.notifiers import email_smtp
 from scripts.orchestration.matching_service import match_watchlist_for_boletin
-from scripts.orchestration.portfolio_sync import match_portfolio_by_identity
+from scripts.orchestration.portfolio_sync import (
+    match_portfolio_by_identity,
+    match_portfolio_conflicts,
+)
 from scripts.parsers import boletin_header
 from scripts.parsers.marca_entry import MarcaEntryParser, ParseStats
 
@@ -385,6 +388,16 @@ def process_pdf(
             # estado ya no se aplica aquí (se gestiona por el flujo
             # manual / importación Excel).
             detections_created += match_portfolio_by_identity(
+                conn,
+                target_user.id,
+                boletin_id,
+                matcheable_entries,
+                source="pdfplumber_text",
+            )
+
+            # Conflicto/competencia: portfolio × entries por nombre +
+            # clase relacionada (excluyendo al propio titular).
+            detections_created += match_portfolio_conflicts(
                 conn,
                 target_user.id,
                 boletin_id,

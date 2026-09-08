@@ -83,16 +83,23 @@ def test_analyze_is_idempotent(tmp_db):
     assert len(db.detections_list_for_user(tmp_db, uid)) == 1
 
 
-def test_analyze_portfolio_no_registro_no_match(tmp_db):
-    """Portfolio sin #registro ni #solicitud: el análisis retroactivo
-    no genera detección aunque el expediente de la entry coincida
-    con el del portafolio."""
+def test_analyze_portfolio_sin_identidad_genera_conflicto(tmp_db):
+    """Portfolio sin #registro ni #solicitud: NO genera own_status pero
+    SÍ puede generar una detección de conflicto (marca parecida de un
+    tercero publicada en el boletín)."""
     uid = db.users_create(tmp_db, "u@x.y", "h")
-    _make_extracted_boletin(tmp_db, uid, _MARCA_TEXT)
+    bid = _make_extracted_boletin(tmp_db, uid, _MARCA_TEXT)
     db.portfolio_add(tmp_db, uid, "RAPTOR")  # sin #registro/#solicitud
 
     res = analyze_boletines_for_user(tmp_db, uid, run_watchlist=False)
-    assert res["detecciones_creadas"] == 0
+    assert res["detecciones_creadas"] == 1
+
+    detections = db.detections_list_for_user(tmp_db, uid)
+    assert len(detections) == 1
+    assert detections[0].match_kind == "conflict"
+    assert detections[0].portfolio_id is not None
+    assert detections[0].boletin_id == bid
+    assert detections[0].risk_score is not None
 
 
 def test_analyze_watchlist_name_class_distingue(tmp_db):
@@ -213,6 +220,55 @@ def test_match_watchlist_direct(tmp_db):
     th = combined.Thresholds.from_settings(85, 80)
     created = match_watchlist_for_boletin(tmp_db, uid, bid, matcheable, th)
     assert created == 1
+
+
+def test_watch_family_containment_is_conflict(tmp_db):
+    """Watchlist con match_family=1 cruza clases SOLO si el nombre de la
+    entry contiene la familia vigilada: DRAGON (clase 4) ← DRAGON WINCH
+    (clase 39) se detecta como conflicto."""
+    text = (
+        "MARCAS CON ORDEN DE PUBLICACIÓN EN PRENSA\n"
+        "--- página 8 ---\n"
+        "Insc. 2026-004496 del 12 DE ENERO DE 2026\n"
+        "SOLICITADA POR: DRAGON WINCH SP ZOO Domicilio: POLONIA País: POLONIA\n"
+        "DRAGON WINCH\n"
+        "EN CLASE: 39\n"
+        "PARA DISTINGUIR: REMOLQUE Y RECUPERACIÓN DE VEHÍCULOS.\n"
+    )
+    uid = db.users_create(tmp_db, "u@x.y", "h")
+    bid = _make_extracted_boletin(tmp_db, uid, text)
+    # Watchlist DRAGON clase 4 + match_family: la familia cruza la clase.
+    db.watchlist_add(tmp_db, uid, "DRAGON", class_nice=4, match_family=1)
+
+    res = analyze_boletines_for_user(tmp_db, uid, run_portfolio=False)
+    assert res["detecciones_creadas"] == 1
+    detections = db.detections_list_for_user(tmp_db, uid)
+    assert len(detections) == 1
+    assert detections[0].mark_name == "DRAGON WINCH"
+    assert detections[0].watchlist_id is not None
+    assert detections[0].match_kind == "conflict"
+    assert detections[0].risk_score is not None
+
+
+def test_watch_family_no_cross_class_without_family(tmp_db):
+    """match_family=1 NO cruza clases si la entry no contiene la familia
+    (marca distinta en otra clase): la regla AND de clase se mantiene."""
+    text = (
+        "MARCAS CON ORDEN DE PUBLICACIÓN EN PRENSA\n"
+        "--- página 8 ---\n"
+        "Insc. 2026-004496 del 12 DE ENERO DE 2026\n"
+        "SOLICITADA POR: OTRA SA Domicilio: CARACAS País: VENEZUELA\n"
+        "INDUSTRIAL\n"
+        "EN CLASE: 39\n"
+        "PARA DISTINGUIR: REMOLQUE Y RECUPERACIÓN DE VEHÍCULOS.\n"
+    )
+    uid = db.users_create(tmp_db, "u@x.y", "h")
+    bid = _make_extracted_boletin(tmp_db, uid, text)
+    db.watchlist_add(tmp_db, uid, "DRAGON", class_nice=4, match_family=1)
+
+    res = analyze_boletines_for_user(tmp_db, uid, run_portfolio=False)
+    assert res["detecciones_creadas"] == 0
+    assert db.detections_list_for_user(tmp_db, uid) == []
 
 
 def _scalar(conn, sql, *params):

@@ -38,6 +38,8 @@ async def add_watchlist(
             body.class_nice,
             body.notes,
             productos_servicios=body.productos_servicios,
+            match_family=1 if body.match_family else 0,
+            kind=body.kind,
         )
         conn.commit()
     except Exception as e:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from scripts.matcher import combined, exact, fuzzy, phonetic
+from scripts.matcher import family, nice_classes, risk
 
 
 class TestExact:
@@ -64,7 +65,120 @@ class TestPhonetic:
         assert phonetic.phonetic_score("", "ACME") == 0.0
 
 
-class TestCombined:
+class TestPhoneticHispano:
+    def test_baca_vaca(self):
+        # v/b colapsan en español.
+        assert phonetic.phonetic_score("BACA", "VACA") == 1.0
+
+    def test_zapato_sapato(self):
+        # z -> s (seseo).
+        assert phonetic.phonetic_score("ZAPATO", "SAPATO") == 1.0
+
+    def test_hecho_echo(self):
+        # h muda se ignora.
+        assert phonetic.phonetic_score("HECHO", "ECHO") == 1.0
+
+    def test_llega_and_llave(self):
+        # ll -> y.
+        assert phonetic.phonetic_score("LLAVE", "YAVE") == 1.0
+
+    def test_nino_nino(self):
+        # ñ -> n.
+        assert phonetic.phonetic_score("NIÑO", "NINO") == 1.0
+
+    def test_qu_k_and_ei(self):
+        # QUIOSCO vs KIOSKO: qu -> k y la vocal se mantiene; coinciden.
+        assert phonetic.phonetic_score("KIOSKO", "QUIOSCO") == 1.0
+        # c+e/i -> s: CERO vs SERO.
+        assert phonetic.phonetic_score("CERO", "SERO") == 1.0
+
+    def test_kwik_quick_not_match(self):
+        # KWIK vs QUICK: KWIK tiene una 'w' que no es patrón español; no
+        # debe colapsar con QUICK.
+        assert phonetic.phonetic_score("KWIK", "QUICK") == 0.0
+
+
+class TestNiceClasses:
+    def test_same(self):
+        assert nice_classes.classes_related(12, 12) == "same"
+
+    def test_related_group(self):
+        # 7 y 12 (máquinas/vehículos) están en el mismo bloque.
+        assert nice_classes.classes_related(7, 12) == "related"
+
+    def test_service_commercial_complements(self):
+        # 35 (venta) complementa a cualquier producto.
+        assert nice_classes.classes_related(35, 12) == "related"
+        assert nice_classes.classes_related(1, 35) == "related"
+
+    def test_unrelated(self):
+        # 12 (vehículos) y 3 (cosméticos) no se relacionan.
+        assert nice_classes.classes_related(12, 3) == "unrelated"
+
+    def test_none_is_distant(self):
+        assert nice_classes.classes_related(None, 12) == "distant"
+
+    def test_proximity_values(self):
+        assert nice_classes.proximity(12, 12) == 1.0
+        assert nice_classes.proximity(7, 12) == 0.6
+        assert nice_classes.proximity(12, 3) == 0.0
+        assert nice_classes.proximity(None, 12) == 0.3
+
+
+class TestRisk:
+    def test_high_overlap(self):
+        s = risk.risk_score(
+            name_sim=1.0, class_proximity=1.0, products_overlap=True
+        )
+        assert s > 0.9
+
+    def test_low_risk(self):
+        s = risk.risk_score(
+            name_sim=0.5, class_proximity=0.0, products_overlap=False
+        )
+        assert s < 0.6
+
+    def test_unknown_overlap_neutral(self):
+        s = risk.risk_score(name_sim=0.5, class_proximity=0.5, products_overlap=None)
+        with_overlap = risk.risk_score(
+            name_sim=0.5, class_proximity=0.5, products_overlap=True
+        )
+        without_overlap = risk.risk_score(
+            name_sim=0.5, class_proximity=0.5, products_overlap=False
+        )
+        assert without_overlap < s < with_overlap
+
+    def test_titular_known_conflict_bonus(self):
+        base = risk.risk_score(name_sim=0.9, class_proximity=1.0, products_overlap=True)
+        bonus = risk.risk_score(
+            name_sim=0.9, class_proximity=1.0, products_overlap=True,
+            titular_known_conflict=True,
+        )
+        assert bonus > base
+        assert bonus <= 1.0
+
+
+class TestFamily:
+    def test_dragon_winch_contains(self):
+        # DRAGON WINCH contiene DRAGON -> familia.
+        assert family.family_score("DRAGON", "DRAGON WINCH") == 1.0
+
+    def test_raptor_hydraulic(self):
+        assert family.family_score("RAPTOR", "RAPTOR HYDRAULIC") == 1.0
+
+    def test_max_maxt_not_contained(self):
+        # MAX vs MAXXT: no es contención (MAXTT tiene 'maxt', distinto).
+        assert family.family_score("MAX", "MAXTT") == 0.0
+
+    def test_overlap_symmetric(self):
+        assert family.family_overlap("DRAGON", "DRAGON WINCH") == 1.0
+        assert family.family_overlap("RAPTOR", "EAGLE RAPTOR") == 1.0
+        assert family.family_overlap("MAX", "MAXTT") == 0.0
+
+    def test_non_brand_tokens_ignored(self):
+        # CA/S.A. genéricos no cuentan como tokens de marca.
+        assert family.core_tokens("ACME CA") == ["acme"]
+        assert family.family_score("ACME SA", "ACME CORP") == 1.0
     def test_exact_match(self):
         r = combined.score_pair("ACME", "ACME")
         assert r.is_match

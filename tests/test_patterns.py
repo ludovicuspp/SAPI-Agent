@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from scripts.parsers.patterns.base import (
+    DISTINGUIR_RE,
     clean_marca,
     clean_titular,
     extract_brand_lines,
@@ -10,6 +11,50 @@ from scripts.parsers.patterns.base import (
     normalize_pais,
     parse_clase,
 )
+
+
+class TestDistingueMultilinea:
+    def _grab(self, text):
+        m = DISTINGUIR_RE.search(text)
+        return m.group("distinguir").strip() if m else None
+
+    def test_una_linea(self):
+        assert self._grab("PARA DISTINGUIR: VEHÍCULOS Y AUTOMÓVILES") == (
+            "VEHÍCULOS Y AUTOMÓVILES"
+        )
+
+    def test_multilinea(self):
+        text = (
+            "PARA DISTINGUIR: CONSTRUCCIÓN, REPARACIÓN Y\n"
+            "MANTENIMIENTO DE MÁQUINAS Y HERRAMIENTAS\n"
+            "SOLICITADA POR: X"
+        )
+        assert self._grab(text) == (
+            "CONSTRUCCIÓN, REPARACIÓN Y\nMANTENIMIENTO DE MÁQUINAS Y HERRAMIENTAS"
+        )
+
+    def test_corta_en_linea_en_blanco(self):
+        text = (
+            "PARA DISTINGUIR: VEHÍCULOS\n"
+            "\n"
+            "Insc. 2026-0001 del 1 DE ENERO DE 2026"
+        )
+        assert self._grab(text) == "VEHÍCULOS"
+
+    def test_corta_en_siguiente_insc(self):
+        text = (
+            "PARA DISTINGUIR: ACCESORIOS Y PARTES PARA AUTOMÓVILES\n"
+            "Insc. 2026-0002 del 2 DE ENERO DE 2026"
+        )
+        assert self._grab(text) == "ACCESORIOS Y PARTES PARA AUTOMÓVILES"
+
+    def test_corta_en_campo_siguiente(self):
+        text = (
+            "PARA DISTINGUIR: ROPA Y CALZADO\n"
+            "DOMICILIO: CARACAS\n"
+            "EN CLASE: 25"
+        )
+        assert self._grab(text) == "ROPA Y CALZADO"
 
 
 class TestCleanMarca:

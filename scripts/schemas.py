@@ -11,7 +11,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
-MatchKind = Literal["similar", "own_status"]
+MatchKind = Literal["similar", "own_status", "conflict"]
 Source = Literal["pdfplumber_text", "hermes_llm", "hermes_vision"]
 Confidence = Literal["high", "medium", "low"]
 # agent se mantiene como rol legacy (BD existente); usuarios nuevos usan
@@ -70,6 +70,8 @@ class WatchlistIn(BaseModel):
     class_nice: Optional[int] = Field(default=None, ge=1, le=45)
     notes: Optional[str] = None
     productos_servicios: Optional[str] = Field(default=None, max_length=2000)
+    match_family: bool = False
+    kind: Literal["marca", "titular"] = "marca"
 
 
 class WatchlistOut(BaseModel):
@@ -79,6 +81,8 @@ class WatchlistOut(BaseModel):
     class_nice: Optional[int]
     notes: Optional[str]
     productos_servicios: Optional[str] = None
+    match_family: bool = False
+    kind: Literal["marca", "titular"] = "marca"
     active: bool
     created_at: datetime
 
@@ -241,6 +245,7 @@ class DetectionOut(BaseModel):
     page: Optional[int]
     similarity: float
     match_kind: MatchKind
+    risk_score: Optional[float] = None
     source: Source
     confidence: Confidence
     raw_excerpt: Optional[str]

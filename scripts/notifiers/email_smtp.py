@@ -148,33 +148,67 @@ def render_digest(
 ) -> tuple[str, str]:
     """Genera un (subject, html) con el resumen de varias detections.
 
-    Usado por ``send-digest`` del CLI.
+    Agrupa por severidad: conflictos primero (con su riesgo), luego las
+    similares y por último el estado propio. Usado por ``send-digest``
+    del CLI.
     """
     if not period_label:
         period_label = datetime.utcnow().strftime("%Y-%m-%d")
-    subject = f"[SAPI-Agent] Resumen {period_label}: {len(detections)} coincidencias"
-    rows = []
-    for d in detections:
-        b = boletines_by_id.get(d.boletin_id)
-        bn = f"#{b.bulletin_number}" if b and b.bulletin_number else "—"
-        rows.append(
-            f"<tr><td>{bn}</td><td>{d.mark_name}</td>"
-            f"<td>{d.expediente or '—'}</td>"
-            f"<td>{d.class_nice or '—'}</td>"
-            f"<td>{d.similarity * 100:.1f}%</td>"
-            f"<td>{d.source}</td></tr>"
-        )
-    html = f"""
-<html><body style="font-family:Arial,sans-serif;color:#222">
-  <h2>Resumen de coincidencias ({period_label})</h2>
-  <p>Total: <b>{len(detections)}</b></p>
+    conflictos = [d for d in detections if d.match_kind == "conflict"]
+    similares = [d for d in detections if d.match_kind == "similar"]
+    propios = [d for d in detections if d.match_kind == "own_status"]
+
+    def _rows(group: list[DetectionRow], show_risk: bool) -> str:
+        rows = []
+        for d in sorted(
+            group, key=lambda x: x.risk_score or 0.0, reverse=True
+        ):
+            b = boletines_by_id.get(d.boletin_id)
+            bn = f"#{b.bulletin_number}" if b and b.bulletin_number else "—"
+            riesgo = (
+                f"<td>{d.risk_score * 100:.0f}%</td>"
+                if show_risk and d.risk_score is not None else "<td>—</td>"
+            )
+            rows.append(
+                f"<tr><td>{bn}</td><td>{d.mark_name}</td>"
+                f"<td>{d.expediente or '—'}</td>"
+                f"<td>{d.class_nice or '—'}</td>"
+                f"<td>{d.similarity * 100:.1f}%</td>"
+                f"{riesgo}"
+                f"<td>{d.source}</td></tr>"
+            )
+        return "".join(rows)
+
+    def _section(
+        title: str, group: list[DetectionRow], color: str, show_risk: bool
+    ) -> str:
+        if not group:
+            return ""
+        header_risk = "<th>Riesgo</th>" if show_risk else ""
+        return f"""
+  <h3 style="color:{color}">{title} ({len(group)})</h3>
   <table border="1" cellpadding="4" style="border-collapse:collapse">
     <tr style="background:#eee">
       <th>Boletín</th><th>Marca</th><th>Expediente</th>
-      <th>Clase</th><th>Similitud</th><th>Fuente</th>
+      <th>Clase</th><th>Similitud</th>{header_risk}<th>Fuente</th>
     </tr>
-    {"".join(rows)}
+    {_rows(group, show_risk)}
   </table>
+"""
+
+    subject = (
+        f"[SAPI-Agent] Resumen {period_label}: {len(detections)} coincidencias"
+        f" ({len(conflictos)} en conflicto)"
+        if conflictos
+        else f"[SAPI-Agent] Resumen {period_label}: {len(detections)} coincidencias"
+    )
+    html = f"""
+<html><body style="font-family:Arial,sans-serif;color:#222">
+  <h2>Resumen de coincidencias ({period_label})</h2>
+  <p>Total: <b>{len(detections)}</b> · Conflictos: <b>{len(conflictos)}</b> · Similares: <b>{len(similares)}</b> · Estado propio: <b>{len(propios)}</b></p>
+  {_section("⚠️ Posibles conflictos", conflictos, "#c0392b", True)}
+  {_section("Marcas similares", similares, "#2980b9", False)}
+  {_section("Estado propio", propios, "#7f8c8d", False)}
 </body></html>
 """.strip()
     return subject, html
