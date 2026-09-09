@@ -35,6 +35,7 @@ from scripts.orchestration.portfolio_sync import (
     match_portfolio_by_identity,
     match_portfolio_conflicts,
 )
+from scripts.lapsos import rebuild_alerts_for_boletin
 
 
 def match_watchlist_for_boletin(
@@ -425,6 +426,9 @@ def analyze_boletines_for_user(
         if created:
             conn.commit()
             total_created += created
+        # Los lapsos legales derivan de las detecciones: se refrescan
+        # siempre (idempotente) por si cambió el plazo configurado.
+        rebuild_alerts_for_boletin(conn, boletin.id)
 
     conn.commit()
     return {

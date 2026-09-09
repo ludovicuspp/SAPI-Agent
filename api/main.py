@@ -12,6 +12,7 @@ from scripts.config import get_settings
 
 from api.middleware import ApiVersioningMiddleware
 from api.routers import (
+    alerts,
     auth,
     boletines,
     detections,
@@ -101,6 +102,7 @@ def create_app() -> FastAPI:
     _app.include_router(boletines.router, prefix="/api/boletines", tags=["boletines"])
     _app.include_router(uploads.router, prefix="/api/boletines", tags=["uploads"])
     _app.include_router(detections.router, prefix="/api/detections", tags=["detections"])
+    _app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
     _app.include_router(structured.router, prefix="/api/boletines", tags=["structured"])
     _app.include_router(summary.router, prefix="/api/summary", tags=["summary"])
     _app.include_router(export.router, prefix="/api/export", tags=["export"])

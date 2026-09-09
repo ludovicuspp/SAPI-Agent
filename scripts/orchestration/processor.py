@@ -53,6 +53,7 @@ from scripts.orchestration.portfolio_sync import (
     match_portfolio_by_identity,
     match_portfolio_conflicts,
 )
+from scripts.lapsos import rebuild_alerts_for_boletin
 from scripts.parsers import boletin_header
 from scripts.parsers.marca_entry import MarcaEntryParser, ParseStats
 
@@ -76,6 +77,7 @@ class ProcessResult:
     entries_lema: int
     entries_hermes_pending: int
     detections_created: int
+    lapsos_created: int
     emailed: int
     email_failed: int
     duration_ms: int
@@ -358,6 +360,7 @@ def process_pdf(
                 "bulletin_number": metadata.bulletin_number,
                 "period": metadata.period,
                 "tomo": metadata.tomo,
+                "fecha_publicacion": getattr(metadata, "fecha_publicacion", None),
             },
             "parse_stats": {
                 "total": stats.total_inscripciones,
@@ -376,6 +379,7 @@ def process_pdf(
             bulletin_number=metadata.bulletin_number,
             period=metadata.period,
             tomo=metadata.tomo,
+            fecha_publicacion=getattr(metadata, "fecha_publicacion", None),
             needs_hermes_review=needs_hermes,
             entries_matcheables=stats.entries_matcheables,
             entries_hermes_pending=stats.entries_hermes_pending,
@@ -431,6 +435,12 @@ def process_pdf(
                 source="pdfplumber_text",
             )
 
+        # ── Lapsos legales (Fase 2) ─────────────────────────────
+        # Cada detección con disposición (o publicación para oposición)
+        # abre una alerta con fecha límite calculada en días hábiles
+        # desde la fecha de publicación del boletín.
+        lapsos_created = rebuild_alerts_for_boletin(conn, boletin_id, cfg)
+
         # ── Notificación por email (opcional) ─────────────────
         _report_progress("notifying")
         emailed = 0
@@ -468,7 +478,7 @@ def process_pdf(
                 f"({stats.entries_matcheables} matcheables, "
                 f"{stats.entries_figura} figura, "
                 f"{stats.entries_lema} lema), "
-                f"{detections_created} detections"
+                f"{detections_created} detections, {lapsos_created} lapsos"
             ),
             duration_ms=duration_ms,
         )
@@ -494,6 +504,7 @@ def process_pdf(
             entries_lema=stats.entries_lema,
             entries_hermes_pending=stats.entries_hermes_pending,
             detections_created=detections_created,
+            lapsos_created=lapsos_created,
             emailed=emailed,
             email_failed=email_failed,
             duration_ms=duration_ms,

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 import sqlite3
 
 from scripts import db
+from scripts.lapsos import derivar_estado
 from api.deps import get_db, get_current_user
 from api.routers._helpers import boletin_to_out, detection_to_out
 from scripts.schemas import SummaryOut
@@ -22,12 +23,23 @@ async def get_summary(
     recent_detections = db.detections_list_for_user(conn, user.id, limit=5)
     user_id = None if is_admin else user.id
     recent_boletines = db.boletines_list_recent(conn, user_id=user_id, limit=5)
+
+    alerts = db.alerts_list_for_user(conn, user.id, limit=500)
+    pen = [a for a in alerts if derivar_estado(a) == "pendiente"]
+    overdue = [a for a in alerts if derivar_estado(a) == "vencida"]
+    next_due = None
+    if pen:
+        next_due = min(p.fecha_limite for p in pen)
+
     return SummaryOut(
         watchlist_count=stats.watchlist_count,
         portfolio_count=stats.portfolio_count,
         boletines_count=stats.boletines_count,
         detections_count=stats.detections_count,
         last_boletin_at=stats.last_boletin_at,
+        alerts_pending=len(pen),
+        alerts_overdue=len(overdue),
+        alert_next_due=next_due,
         recent_detections=[detection_to_out(d) for d in recent_detections],
         recent_boletines=[boletin_to_out(b, conn) for b in recent_boletines],
     )

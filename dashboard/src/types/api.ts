@@ -93,6 +93,7 @@ export interface Boletin {
   bulletin_number: number | null;
   period: string | null;
   tomo?: string | null;
+  fecha_publicacion?: string | null;
   pages: number | null;
   status: BoletinStatus;
   needs_hermes_review: boolean;
@@ -152,8 +153,51 @@ export interface Summary {
   boletines_count: number;
   detections_count: number;
   last_boletin_at: string | null;
+  alerts_pending: number;
+  alerts_overdue: number;
+  alert_next_due: string | null;
   recent_detections: Detection[];
   recent_boletines: Boletin[];
+}
+
+export type LapseKey =
+  | "pago_concesion"
+  | "subsanar_forma"
+  | "subsanar_fondo"
+  | "recurso_negacion"
+  | "recurso_caducidad"
+  | "recurso_inadmisible"
+  | "oposicion";
+
+export type AlertEstado = "pendiente" | "cumplida" | "descartada" | "vencida";
+
+export interface Alert {
+  id: number;
+  user_id: number;
+  detection_id: number;
+  boletin_id: number;
+  lapse_key: LapseKey;
+  label: string;
+  estado: AlertEstado;
+  dias_habiles: number;
+  dias_restantes: number;
+  fecha_publicacion: string | null;
+  fecha_limite: string;
+  resolved_at: string | null;
+  created_at: string;
+  marca: string | null;
+  expediente: string | null;
+  boletin_number: number | null;
+  boletin_period: string | null;
+  disposicion: string | null;
+  tipo_disposicion: string | null;
+}
+
+export interface LapseConfig {
+  key: LapseKey;
+  label: string;
+  dias_habiles: number;
+  default_dias_habiles: number;
 }
 
 export interface BoletinProgress {

@@ -196,6 +196,7 @@ class BoletinOut(BaseModel):
     bulletin_number: Optional[int]
     period: Optional[str]
     tomo: Optional[str] = None
+    fecha_publicacion: Optional[str] = None
     pages: Optional[int]
     status: str
     needs_hermes_review: bool
@@ -359,6 +360,9 @@ class SummaryOut(BaseModel):
     boletines_count: int
     detections_count: int
     last_boletin_at: Optional[datetime]
+    alerts_pending: int = 0
+    alerts_overdue: int = 0
+    alert_next_due: Optional[str] = None
     recent_detections: list[DetectionOut]
     recent_boletines: list[BoletinOut]
 
@@ -378,3 +382,58 @@ class StructuredOut(BaseModel):
     boletin_id: int
     status: str
     entries_added: int
+
+
+# ── Fase 2: /api/alerts (lapsos legales, plazos editables) ─────
+
+
+LapseKey = Literal[
+    "pago_concesion",
+    "subsanar_forma",
+    "subsanar_fondo",
+    "recurso_negacion",
+    "recurso_caducidad",
+    "recurso_inadmisible",
+    "oposicion",
+]
+
+AlertEstado = Literal["pendiente", "cumplida", "descartada", "vencida"]
+
+
+class LapseConfigOut(BaseModel):
+    key: LapseKey
+    label: str
+    dias_habiles: int
+    default_dias_habiles: int
+
+
+class LapseConfigIn(BaseModel):
+    dias_habiles: int = Field(ge=1, le=365)
+
+
+class AlertOut(BaseModel):
+    id: int
+    user_id: int
+    detection_id: int
+    boletin_id: int
+    lapse_key: LapseKey
+    label: str
+    marca: Optional[str] = None
+    expediente: Optional[str] = None
+    fecha_publicacion: Optional[str] = None
+    fecha_limite: str
+    dias_habiles: int
+    estado: AlertEstado
+    dias_restantes: int
+    created_at: str
+    resolved_at: Optional[str] = None
+    boletin_number: Optional[int] = None
+    boletin_period: Optional[str] = None
+    boletin_filename: Optional[str] = None
+    match_kind: Optional[str] = None
+    disposicion: Optional[str] = None
+    tipo_disposicion: Optional[str] = None
+
+
+class AlertResolveIn(BaseModel):
+    estado: Literal["cumplida", "descartada"]

@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS boletines (
     bulletin_number INTEGER,
     period TEXT,
     tomo TEXT,
+    fecha_publicacion TEXT,
     pages INTEGER,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending','extracting','extracted',
@@ -216,6 +217,45 @@ CREATE TABLE IF NOT EXISTS scans_log (
 );
 CREATE INDEX IF NOT EXISTS idx_scans_log_boletin ON scans_log(boletin_id);
 CREATE INDEX IF NOT EXISTS idx_scans_log_created ON scans_log(created_at);
+
+-- ── Fase 2: Alertas por lapsos legales (plazos editables) ─────
+
+CREATE TABLE IF NOT EXISTS lapse_config (
+    key TEXT PRIMARY KEY
+        CHECK (key IN ('pago_concesion','subsanar_forma','subsanar_fondo',
+                       'recurso_negacion','recurso_caducidad',
+                       'recurso_inadmisible','oposicion')),
+    label TEXT NOT NULL,
+    dias_habiles INTEGER NOT NULL
+        CHECK (dias_habiles >= 1 AND dias_habiles <= 365),
+    default_dias_habiles INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    detection_id INTEGER NOT NULL REFERENCES detections(id) ON DELETE CASCADE,
+    boletin_id INTEGER NOT NULL REFERENCES boletines(id) ON DELETE CASCADE,
+    lapse_key TEXT NOT NULL
+        CHECK (lapse_key IN ('pago_concesion','subsanar_forma','subsanar_fondo',
+                             'recurso_negacion','recurso_caducidad',
+                             'recurso_inadmisible','oposicion')),
+    label TEXT NOT NULL,
+    marca TEXT,
+    expediente TEXT,
+    fecha_publicacion TEXT,
+    fecha_limite TEXT NOT NULL,
+    dias_habiles INTEGER NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'pendiente'
+        CHECK (estado IN ('pendiente','cumplida','descartada')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT,
+    UNIQUE(user_id, detection_id)
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_user_estado
+    ON alerts(user_id, estado, fecha_limite);
+CREATE INDEX IF NOT EXISTS idx_alerts_boletin ON alerts(boletin_id);
 """
 
 
@@ -249,6 +289,11 @@ def init_db(db_path: str | Path) -> None:
     with connect(db_path) as conn:
         _migrate_add_columns(conn)
         conn.executescript(SCHEMA_SQL)
+        # Plazos de los lapsos legales (import diferido para evitar ciclo:
+        # lapsos.py importa db.py).
+        from scripts.lapsos import DEFAULT_LAPSOS
+
+        lapse_config_seed(conn, DEFAULT_LAPSOS)
         conn.commit()
 
 
@@ -290,6 +335,9 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("boletin_entries", "tipo_disposicion", "TEXT"),
         ("detections", "disposicion", "TEXT"),
         ("detections", "tipo_disposicion", "TEXT"),
+        # Gemelo digital: fecha del boletín ("Caracas, DD de MES de YYYY").
+        # Es la fecha base de los lapsos legales (fase 2).
+        ("boletines", "fecha_publicacion", "TEXT"),
         # Portfolio ampliado (módulo portfolio: 17 campos + historial).
         ("portfolio", "pais", "TEXT NOT NULL DEFAULT 'Venezuela'"),
         ("portfolio", "etiqueta", "TEXT"),
@@ -1184,6 +1232,7 @@ class BoletinRow:
     uploaded_at: str
     processed_at: Optional[str]
     tomo: Optional[str] = None
+    fecha_publicacion: Optional[str] = None
     entries_matcheables: int = 0
     entries_hermes_pending: int = 0
     entries_figura: int = 0
@@ -1232,6 +1281,7 @@ def boletines_mark_extracted(
     entries_figura: int = 0,
     entries_lema: int = 0,
     tomo: Optional[str] = None,
+    fecha_publicacion: Optional[str] = None,
 ) -> None:
     conn.execute(
         "UPDATE boletines SET"
@@ -1241,6 +1291,7 @@ def boletines_mark_extracted(
         " bulletin_number = ?,"
         " period = ?,"
         " tomo = ?,"
+        " fecha_publicacion = ?,"
         " needs_hermes_review = ?,"
         " entries_matcheables = ?,"
         " entries_hermes_pending = ?,"
@@ -1256,6 +1307,7 @@ def boletines_mark_extracted(
             bulletin_number,
             period,
             tomo,
+            fecha_publicacion,
             1 if needs_hermes_review else 0,
             entries_matcheables,
             entries_hermes_pending,
@@ -1873,6 +1925,188 @@ def scans_log_record(
         (user_id, kind, boletin_id, summary, status, detail, duration_ms),
     )
     return cur.lastrowid
+
+
+# ── Fase 2: lapsos legales (config) y alertas de plazo ─────────
+
+
+@dataclass
+class LapseConfigRow:
+    key: str
+    label: str
+    dias_habiles: int
+    default_dias_habiles: int
+    updated_at: str
+
+
+def _lapse_config_from_row(row: sqlite3.Row) -> LapseConfigRow:
+    return LapseConfigRow(**dict(row))
+
+
+def lapse_config_list(conn: sqlite3.Connection) -> list[LapseConfigRow]:
+    rows = conn.execute(
+        "SELECT * FROM lapse_config ORDER BY key"
+    ).fetchall()
+    return [_lapse_config_from_row(r) for r in rows]
+
+
+def lapse_config_get(
+    conn: sqlite3.Connection, key: str
+) -> Optional[LapseConfigRow]:
+    row = conn.execute(
+        "SELECT * FROM lapse_config WHERE key = ?", (key,)
+    ).fetchone()
+    return _lapse_config_from_row(row) if row else None
+
+
+def lapse_config_update(
+    conn: sqlite3.Connection,
+    key: str,
+    *,
+    dias_habiles: int,
+    label: Optional[str] = None,
+) -> None:
+    if label:
+        conn.execute(
+            "UPDATE lapse_config SET dias_habiles = ?, label = ?,"
+            " updated_at = datetime('now') WHERE key = ?",
+            (dias_habiles, label, key),
+        )
+    else:
+        conn.execute(
+            "UPDATE lapse_config SET dias_habiles = ?,"
+            " updated_at = datetime('now') WHERE key = ?",
+            (dias_habiles, key),
+        )
+
+
+def lapse_config_seed(
+    conn: sqlite3.Connection, defaults: Iterable[dict[str, Any]]
+) -> None:
+    """Siembra los plazos por defecto sin pisar valores editados."""
+    for d in defaults:
+        conn.execute(
+            "INSERT OR IGNORE INTO lapse_config(key, label, dias_habiles,"
+            " default_dias_habiles) VALUES (?,?,?,?)",
+            (d["key"], d["label"], d["dias_habiles"], d["dias_habiles"]),
+        )
+
+
+@dataclass
+class AlertRow:
+    id: int
+    user_id: int
+    detection_id: int
+    boletin_id: int
+    lapse_key: str
+    label: str
+    marca: Optional[str]
+    expediente: Optional[str]
+    fecha_publicacion: Optional[str]
+    fecha_limite: str
+    dias_habiles: int
+    estado: str
+    created_at: str
+    resolved_at: Optional[str]
+
+
+def _alert_from_row(row: sqlite3.Row) -> AlertRow:
+    return AlertRow(**dict(row))
+
+
+def alerts_upsert(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    detection_id: int,
+    boletin_id: int,
+    lapse_key: str,
+    label: str,
+    marca: Optional[str],
+    expediente: Optional[str],
+    fecha_publicacion: Optional[str],
+    fecha_limite: str,
+    dias_habiles: int,
+) -> int:
+    """Inserta o refresca la alerta de un lapso para una detection.
+
+    ``UNIQUE(user_id, detection_id)``: una alerta por detección. Al
+    refrescar (p.ej. porque se editó el plazo), NO se toca el estado de
+    las ya resueltas (``cumplida``/``descartada``) para conservar el
+    historial; las ``pendiente`` se recalculan.
+    """
+    cur = conn.execute(
+        "INSERT INTO alerts(user_id, detection_id, boletin_id, lapse_key,"
+        " label, marca, expediente, fecha_publicacion, fecha_limite,"
+        " dias_habiles, estado)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?, 'pendiente')"
+        " ON CONFLICT(user_id, detection_id) DO UPDATE SET"
+        " boletin_id = excluded.boletin_id,"
+        " lapse_key = excluded.lapse_key,"
+        " label = excluded.label,"
+        " marca = COALESCE(excluded.marca, alerts.marca),"
+        " expediente = COALESCE(excluded.expediente, alerts.expediente),"
+        " fecha_publicacion = excluded.fecha_publicacion,"
+        " fecha_limite = excluded.fecha_limite,"
+        " dias_habiles = excluded.dias_habiles,"
+        " estado = CASE"
+        "   WHEN alerts.estado = 'pendiente' THEN 'pendiente'"
+        "   ELSE alerts.estado END",
+        (
+            user_id,
+            detection_id,
+            boletin_id,
+            lapse_key,
+            label,
+            marca,
+            expediente,
+            fecha_publicacion,
+            fecha_limite,
+            dias_habiles,
+        ),
+    )
+    return cur.lastrowid
+
+
+def alerts_list_for_user(
+    conn: sqlite3.Connection,
+    user_id: int,
+    *,
+    estado: Optional[str] = None,
+    boletin_id: Optional[int] = None,
+    limit: int = 200,
+) -> list[AlertRow]:
+    sql = "SELECT * FROM alerts WHERE user_id = ?"
+    params: list = [user_id]
+    if estado:
+        sql += " AND estado = ?"
+        params.append(estado)
+    if boletin_id:
+        sql += " AND boletin_id = ?"
+        params.append(boletin_id)
+    sql += " ORDER BY fecha_limite ASC, id ASC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+    return [_alert_from_row(r) for r in rows]
+
+
+def alerts_resolve(
+    conn: sqlite3.Connection,
+    alert_id: int,
+    *,
+    user_id: int,
+    estado: str,
+) -> Optional[AlertRow]:
+    """Marca una alerta como ``cumplida`` o ``descartada`` (owner o admin)."""
+    cur = conn.execute(
+        "UPDATE alerts SET estado = ?, resolved_at = datetime('now')"
+        " WHERE id = ? AND user_id = ?",
+        (estado, alert_id, user_id),
+    )
+    if cur.rowcount == 0:
+        return None
+    row = conn.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+    return _alert_from_row(row) if row else None
 
 
 # ── stats helpers ──────────────────────────────────────────────

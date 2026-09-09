@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { request } from "@/lib/api";
-import { formatSimilarity, statusLabel, statusColor, sourceLabel } from "@/lib/format";
+import { formatSimilarity, statusLabel, statusColor, sourceLabel, formatDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { Summary } from "@/types/api";
-import { FileText, Search, ListChecks, Briefcase } from "lucide-react";
+import { FileText, Search, ListChecks, Briefcase, BellRing } from "lucide-react";
 
 export default function SummaryPage() {
   const [data, setData] = useState<Summary | null>(null);
@@ -68,6 +69,11 @@ export default function SummaryPage() {
     { label: "Detecciones", value: data.detections_count, icon: Search, color: "text-orange-600" },
   ];
 
+  const alertLabel =
+    data.alerts_overdue > 0
+      ? `Lapsos (${data.alerts_pending} pend. · ${data.alerts_overdue} venc.)`
+      : `Lapsos (${data.alerts_pending} pendientes)`;
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Resumen</h1>
@@ -82,6 +88,21 @@ export default function SummaryPage() {
             </div>
           </Card>
         ))}
+        <Link
+          to="/lapsos"
+          className={cn(
+            "flex items-center gap-4 rounded-xl border bg-white p-4 transition-colors hover:bg-gray-50",
+            (data.alerts_overdue ?? 0) > 0 && "border-red-200 bg-red-50/50",
+          )}
+        >
+          <BellRing className={cn("h-8 w-8", (data.alerts_overdue ?? 0) > 0 ? "text-red-600" : "text-brand-600")} />
+          <div>
+            <div className="text-sm font-bold">{alertLabel}</div>
+            <div className="text-sm text-gray-500">
+              {data.alert_next_due ? `Próximo: ${formatDate(data.alert_next_due)}` : "Sin lapsos activos"}
+            </div>
+          </div>
+        </Link>
       </div>
 
       {data.recent_boletines.length > 0 && (

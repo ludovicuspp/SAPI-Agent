@@ -362,6 +362,36 @@ def cmd_extract_entries(args):
         conn.close()
 
 
+def cmd_rebuild_alerts(args):
+    """(Re)calcula las alertas de lapso de las detecciones de boletines.
+
+    Sin ``--boletin-id`` itera todos los boletines con ``fecha_publicacion``
+    (los demás no tienen fecha base para un lapso).
+    """
+    from scripts.lapsos import rebuild_alerts_for_boletin
+
+    cfg, conn = _load_conn()
+    try:
+        if getattr(args, "boletin_id", None):
+            ids: list[int] = [int(x) for x in args.boletin_id]
+        else:
+            rows = conn.execute(
+                "SELECT id FROM boletines WHERE fecha_publicacion IS NOT NULL"
+                " ORDER BY id"
+            ).fetchall()
+            ids = [r["id"] for r in rows]
+
+        total = 0
+        for bid in ids:
+            n = rebuild_alerts_for_boletin(conn, bid, cfg)
+            total += n
+            print(f"[{bid}] {n} alertas de lapso")
+        print(f"Total: {total} alertas en {len(ids)} boletines")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def cmd_list_detections(args):
     cfg, conn = _load_conn()
     try:
@@ -558,6 +588,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--user-email", required=True)
     s.add_argument("--limit", type=int, default=50)
 
+    s = sub.add_parser(
+        "rebuild-alerts",
+        help="(Re)calcula las alertas de lapsos de todos los boletines.",
+    )
+    s.add_argument(
+        "--boletin-id",
+        nargs="+",
+        action="extend",
+        help="IDs de boletines a procesar (por defecto: todos con fecha).",
+    )
+
     s = sub.add_parser("send-digest", help="Envía resumen por email.")
     s.add_argument("--user-email", required=True)
     s.add_argument("--period-label")
@@ -583,6 +624,7 @@ def main(argv: list[str] | None = None) -> int:
         "process-boletin": cmd_process_boletin,
         "extract-entries": cmd_extract_entries,
         "list-detections": cmd_list_detections,
+        "rebuild-alerts": cmd_rebuild_alerts,
         "send-digest": cmd_send_digest,
         "stats": cmd_stats,
     }

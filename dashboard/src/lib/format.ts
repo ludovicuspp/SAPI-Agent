@@ -110,3 +110,47 @@ export function disposicionColor(tipo: string | null | undefined): string {
   };
   return map[tipo ?? ""] ?? "bg-gray-100 text-gray-700";
 }
+
+/** Etiqueta legible de un lapso legal. */
+export function lapseKeyLabel(key: string): string {
+  const map: Record<string, string> = {
+    pago_concesion: "Pago de concesión",
+    subsanar_forma: "Subsanación de forma",
+    subsanar_fondo: "Subsanación de fondo",
+    recurso_negacion: "Recurso de negación",
+    recurso_caducidad: "Recurso de caducidad",
+    recurso_inadmisible: "Recurso de inadmisibilidad",
+    oposicion: "Oposición a publicación",
+  };
+  return map[key] ?? key;
+}
+
+/** Etiqueta legible del estado de una alerta de lapso. */
+export function alertEstadoLabel(estado: string): string {
+  const map: Record<string, string> = {
+    pendiente: "Pendiente",
+    vencida: "Vencida",
+    cumplida: "Cumplida",
+    descartada: "Descartada",
+  };
+  return map[estado] ?? estado;
+}
+
+/** Color del badge según el estado de una alerta de lapso. */
+export function alertEstadoColor(estado: string): string {
+  const map: Record<string, string> = {
+    pendiente: "bg-blue-100 text-blue-700",
+    vencida: "bg-red-100 text-red-700",
+    cumplida: "bg-emerald-100 text-emerald-700",
+    descartada: "bg-gray-100 text-gray-700",
+  };
+  return map[estado] ?? "bg-gray-100 text-gray-700";
+}
+
+/** Cuenta regresiva en días hábiles para una alerta pendiente. */
+export function alertCountdown(diasRestantes: number | null): string {
+  if (diasRestantes === null) return "—";
+  if (diasRestantes < 0) return `${Math.abs(diasRestantes)}d vencido`;
+  if (diasRestantes === 0) return "vence hoy";
+  return `${diasRestantes}d`;
+}

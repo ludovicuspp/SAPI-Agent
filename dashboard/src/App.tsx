@@ -7,6 +7,7 @@ import SummaryPage from "@/pages/Summary";
 import Boletines from "@/pages/Boletines";
 import BoletinDetail from "@/pages/BoletinDetail";
 import Detections from "@/pages/Detections";
+import AlertsPage from "@/pages/Alerts";
 import WatchlistPage from "@/pages/Watchlist";
 import PortfolioPage from "@/pages/Portfolio";
 import UsersPage from "@/pages/Users";
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="boletines/:id" element={<BoletinDetail />} />
           <Route path="detections" element={<Detections />} />
           <Route path="watchlist" element={<WatchlistPage />} />
+          <Route path="lapsos" element={<AlertsPage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
           <Route
             path="users"

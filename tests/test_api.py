@@ -1459,3 +1459,200 @@ def test_structured_rechaza_tipo_disposicion_invalido(
         headers={"X-Hermes-Token": "valid-hermes-token"},
     )
     assert r.status_code == 422
+
+
+# ── Fase 2: /api/alerts (lapsos legales) ────────────────────────
+
+
+def _mk_alert_boletin(tmp_db, tmp_path, uid: int, bid: int | None = None) -> int:
+    """Crea un boletín 'extracted' con fecha_publicacion y una detección
+    de concesión (que abre lapso de pago)."""
+    if bid is None:
+        bid, _ = _make_extracted_boletin(tmp_db, tmp_path, uid)
+    tmp_db.execute(
+        "UPDATE boletines SET fecha_publicacion='2026-09-01' WHERE id=?", (bid,)
+    )
+    db.detections_add(
+        tmp_db,
+        boletin_id=bid,
+        user_id=uid,
+        mark_name="MARCA X",
+        similarity=1.0,
+        match_kind="own_status",
+        source="pdfplumber_text",
+        confidence="high",
+        expediente="2026-004444",
+        tipo_disposicion="CONCESION",
+    )
+    tmp_db.commit()
+    return bid
+
+
+def test_alerts_list_requires_auth(client: TestClient):
+    assert client.get("/api/alerts").status_code == 401
+
+
+def test_alerts_list_for_user(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    bid = _mk_alert_boletin(tmp_db, tmp_path, agent_user.id)
+    from scripts.lapsos import rebuild_alerts_for_boletin
+
+    rebuild_alerts_for_boletin(tmp_db, bid)
+    tmp_db.commit()
+
+    r = client.get("/api/alerts", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    alerts = r.json()
+    assert len(alerts) == 1
+    a = alerts[0]
+    assert a["lapse_key"] == "pago_concesion"
+    assert a["estado"] == "pendiente"
+    assert a["fecha_limite"] == "2026-10-13"
+    assert a["marca"] == "MARCA X"
+    assert a["boletin_number"] is None  # el fixture no setea bulletin_number
+
+
+def test_alerts_isolated_by_user(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """Un usuario no ve las alertas de otro."""
+    bid = _mk_alert_boletin(tmp_db, tmp_path, agent_user.id)
+    from scripts.lapsos import rebuild_alerts_for_boletin
+
+    rebuild_alerts_for_boletin(tmp_db, bid)
+    tmp_db.commit()
+
+    other, other_token = _make_second_agent(tmp_db)
+    r = client.get("/api/alerts", headers=_auth_header(other_token))
+    assert r.json() == []
+
+
+def test_alerts_resolve_owner_and_forbidden(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    bid = _mk_alert_boletin(tmp_db, tmp_path, agent_user.id)
+    from scripts.lapsos import rebuild_alerts_for_boletin
+
+    rebuild_alerts_for_boletin(tmp_db, bid)
+    tmp_db.commit()
+    alerta = db.alerts_list_for_user(tmp_db, agent_user.id)[0]
+
+    other, other_token = _make_second_agent(tmp_db)
+    r = client.post(
+        f"/api/alerts/{alerta.id}/resolve",
+        json={"estado": "cumplida"},
+        headers=_auth_header(other_token),
+    )
+    assert r.status_code == 403
+
+    r = client.post(
+        f"/api/alerts/{alerta.id}/resolve",
+        json={"estado": "cumplida"},
+        headers=_auth_header(agent_token),
+    )
+    assert r.status_code == 200
+    assert r.json()["estado"] == "cumplida"
+    out = db.alerts_list_for_user(tmp_db, agent_user.id)[0]
+    assert out.estado == "cumplida"
+    assert out.resolved_at is not None
+
+    r = client.post(
+        f"/api/alerts/{alerta.id}/resolve",
+        json={"estado": "inventado"},
+        headers=_auth_header(agent_token),
+    )
+    assert r.status_code == 422
+
+
+def test_lapse_config_get_and_admin_put(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    admin_token: str,
+    agent_token: str,
+):
+    r = client.get("/api/alerts/config", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    keys = {c["key"] for c in r.json()}
+    assert keys == {
+        "pago_concesion",
+        "subsanar_forma",
+        "subsanar_fondo",
+        "recurso_negacion",
+        "recurso_caducidad",
+        "recurso_inadmisible",
+        "oposicion",
+    }
+
+    pago = next(c for c in r.json() if c["key"] == "pago_concesion")
+    assert pago["dias_habiles"] == 30
+    assert pago["default_dias_habiles"] == 30
+
+    # Un no-admin no puede editar.
+    r = client.put(
+        "/api/alerts/config/pago_concesion",
+        json={"dias_habiles": 15},
+        headers=_auth_header(agent_token),
+    )
+    assert r.status_code == 403
+
+    r = client.put(
+        "/api/alerts/config/pago_concesion",
+        json={"dias_habiles": 15},
+        headers=_auth_header(admin_token),
+    )
+    assert r.status_code == 200
+    assert r.json()["dias_habiles"] == 15
+    assert r.json()["default_dias_habiles"] == 30
+
+    r = client.put(
+        "/api/alerts/config/lapso_inventado",
+        json={"dias_habiles": 15},
+        headers=_auth_header(admin_token),
+    )
+    assert r.status_code == 404
+
+    r = client.put(
+        "/api/alerts/config/pago_concesion",
+        json={"dias_habiles": 0},
+        headers=_auth_header(admin_token),
+    )
+    assert r.status_code == 422
+
+
+def test_summary_includes_alerts(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    bid = _mk_alert_boletin(tmp_db, tmp_path, agent_user.id)
+    from scripts.lapsos import rebuild_alerts_for_boletin
+
+    rebuild_alerts_for_boletin(tmp_db, bid)
+    tmp_db.commit()
+    # Una vencida: fuerza la fecha límite al pasado.
+    tmp_db.execute(
+        "UPDATE alerts SET fecha_limite='2020-01-01' WHERE boletin_id=?", (bid,)
+    )
+    tmp_db.commit()
+
+    r = client.get("/api/summary", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    data = r.json()
+    assert data["alerts_pending"] == 0
+    assert data["alerts_overdue"] == 1
+    assert data["alert_next_due"] is None

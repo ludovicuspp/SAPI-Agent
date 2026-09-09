@@ -52,6 +52,7 @@ class BoletinMetadata:
     bulletin_number: int | None = None
     period: str | None = None
     tomo: str | None = None
+    fecha_publicacion: str | None = None
     raw_matches: dict[str, str] = field(default_factory=dict)
 
 
@@ -61,7 +62,7 @@ _BULLETIN_RE = re.compile(
 )
 
 _PERIOD_RE = re.compile(
-    r"Caracas,\s+\w+\s+\d{1,2}\s+de\s+(\w+)\s+de\s+(\d{4})",
+    r"Caracas,\s*\w+,?\s*(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})",
     re.IGNORECASE,
 )
 
@@ -92,12 +93,14 @@ def detect(text: str) -> BoletinMetadata:
 
     m = _PERIOD_RE.search(text)
     if m:
-        month_name = m.group(1).lower()
-        year = m.group(2)
+        month_name = m.group(2).lower()
+        year = m.group(3)
         month = _MONTHS_ES.get(month_name, 0)
         if month:
             md.period = f"{year}-{month:02d} ({month_name.capitalize()} {year})"
+            md.fecha_publicacion = f"{year}-{month:02d}-{int(m.group(1)):02d}"
             md.raw_matches["period"] = m.group(0)
+            md.raw_matches["fecha_publicacion"] = md.fecha_publicacion
 
     m = _TOMO_RE.search(text)
     if m:

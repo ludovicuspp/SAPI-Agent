@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   FileText,
   Search,
+  BellRing,
   ListChecks,
   Briefcase,
   Users,
@@ -16,6 +17,7 @@ const navItems = [
   { to: "/", label: "Resumen", icon: LayoutDashboard },
   { to: "/boletines", label: "Boletines", icon: FileText },
   { to: "/detections", label: "Detecciones", icon: Search },
+  { to: "/lapsos", label: "Lapsos legales", icon: BellRing },
   { to: "/watchlist", label: "Watchlist", icon: ListChecks },
   { to: "/portfolio", label: "Portfolio", icon: Briefcase },
 ];

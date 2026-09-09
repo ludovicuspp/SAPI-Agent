@@ -165,6 +165,10 @@ async def submit_structured(
                 source=entry.fuente,
             )
 
+    from scripts.lapsos import rebuild_alerts_for_boletin
+
+    rebuild_alerts_for_boletin(conn, boletin_id, cfg)
+
     db.boletines_mark_hermes_progress_done(conn, boletin_id)
     conn.commit()
     return StructuredOut(boletin_id=boletin_id, status="processed", entries_added=entries_added)

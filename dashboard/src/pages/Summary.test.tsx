@@ -42,6 +42,9 @@ describe("Summary page", () => {
       boletines_count: 12,
       detections_count: 47,
       last_boletin_at: null,
+      alerts_pending: 2,
+      alerts_overdue: 1,
+      alert_next_due: "2026-09-15",
       recent_detections: [],
       recent_boletines: [],
     });
@@ -55,5 +58,6 @@ describe("Summary page", () => {
     expect(screen.getByText("Portfolio")).toBeDefined();
     expect(screen.getByText("Boletines")).toBeDefined();
     expect(screen.getByText("Detecciones")).toBeDefined();
+    expect(screen.getByText("Lapsos (2 pend. · 1 venc.)")).toBeDefined();
   });
 });

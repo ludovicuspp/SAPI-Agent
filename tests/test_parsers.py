@@ -27,6 +27,22 @@ class TestBoletinHeader:
         assert "Marzo" in md.period
         assert "2026" in md.period
 
+    def test_detect_fecha_publicacion(self):
+        """La fecha de publicación es el día del encabezado en ISO."""
+        md = boletin_header.detect(
+            "Boletín N° 652 Caracas, viernes, 10 de abril de 2026"
+        )
+        assert md.fecha_publicacion == "2026-04-10"
+        assert md.period == "2026-04 (Abril 2026)"
+        # Sin coma tras el día de la semana también funciona.
+        md2 = boletin_header.detect("Boletín N° 654 Caracas, lunes 15 de junio de 2026")
+        assert md2.fecha_publicacion == "2026-06-15"
+
+    def test_detect_period_sin_dia(self):
+        md = boletin_header.detect("Caracas, marzo de 2026")
+        assert md.fecha_publicacion is None
+        assert md.period is None
+
     def test_detect_tomo(self):
         md = boletin_header.detect("Tomo IX")
         assert md.tomo == "IX"
