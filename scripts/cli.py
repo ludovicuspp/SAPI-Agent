@@ -344,11 +344,13 @@ def cmd_extract_entries(args):
             data = json.loads(row["extraction_json"])
             pages = data.get("pages", [])
             parser_text = processor._build_parser_text(pages)
-            page_lookup, section_lookup, _disp = processor.make_position_lookups(
-                parser_text
+            page_lookup, section_lookup, disposicion_lookup = (
+                processor.make_position_lookups(parser_text)
             )
             parser = MarcaEntryParser(
-                page_lookup=page_lookup, section_lookup=section_lookup,
+                page_lookup=page_lookup,
+                section_lookup=section_lookup,
+                disposicion_lookup=disposicion_lookup,
             )
             entries, _stats = parser.parse_with_stats(parser_text)
             n = boletines_entries_replace(conn, bid, entries)
