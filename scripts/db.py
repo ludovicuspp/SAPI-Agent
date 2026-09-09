@@ -141,6 +141,8 @@ CREATE TABLE IF NOT EXISTS boletin_entries (
     clase_especial TEXT,
     titular TEXT,
     tramitante TEXT,
+    disposicion TEXT,
+    tipo_disposicion TEXT,
     pais TEXT,
     fecha_inscripcion TEXT,
     estatus TEXT,
@@ -188,7 +190,9 @@ CREATE TABLE IF NOT EXISTS detections (
     fecha_inscripcion TEXT,
     fuente_parsing TEXT,
     es_figura INTEGER NOT NULL DEFAULT 0,
-    es_lema INTEGER NOT NULL DEFAULT 0
+    es_lema INTEGER NOT NULL DEFAULT 0,
+    disposicion TEXT,
+    tipo_disposicion TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_detections_user ON detections(user_id);
 CREATE INDEX IF NOT EXISTS idx_detections_boletin ON detections(boletin_id);
@@ -279,6 +283,13 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("detections", "matched_with", "TEXT"),
         # Gemelo digital: tramitante visible por entrada del boletín.
         ("boletin_entries", "tramitante", "TEXT"),
+        # Gemelo digital: disposición administrativa (resolución SAPI) por
+        # entrada y por detección. ``tipo_disposicion`` es un conjunto
+        # cerrado documentado en scripts/schemas.py (DisposicionTipoLiteral).
+        ("boletin_entries", "disposicion", "TEXT"),
+        ("boletin_entries", "tipo_disposicion", "TEXT"),
+        ("detections", "disposicion", "TEXT"),
+        ("detections", "tipo_disposicion", "TEXT"),
         # Portfolio ampliado (módulo portfolio: 17 campos + historial).
         ("portfolio", "pais", "TEXT NOT NULL DEFAULT 'Venezuela'"),
         ("portfolio", "etiqueta", "TEXT"),
@@ -1534,6 +1545,8 @@ class BoletinEntryRow:
     clase_especial: Optional[str] = None
     titular: Optional[str] = None
     tramitante: Optional[str] = None
+    disposicion: Optional[str] = None
+    tipo_disposicion: Optional[str] = None
     pais: Optional[str] = None
     fecha_inscripcion: Optional[str] = None
     estatus: Optional[str] = None
@@ -1570,6 +1583,8 @@ def _entry_insert_values(
         "clase_especial": getattr(e, "clase_especial", None),
         "titular": getattr(e, "titular", None),
         "tramitante": getattr(e, "tramitante", None),
+        "disposicion": getattr(e, "disposicion", None),
+        "tipo_disposicion": getattr(e, "tipo_disposicion", None),
         "pais": getattr(e, "pais", None),
         "fecha_inscripcion": _fecha,
         "estatus": getattr(e, "estatus", None),
@@ -1604,14 +1619,18 @@ def boletin_entry_upsert(
     conn.execute(
         "INSERT INTO boletin_entries("
         " boletin_id, expediente, marca, class_nice, clase_especial,"
-        " titular, tramitante, pais, fecha_inscripcion, estatus, page,"
+        " titular, tramitante, disposicion, tipo_disposicion, pais,"
+        " fecha_inscripcion, estatus, page,"
         " is_matcheable, is_figura, is_lema, productos_servicios,"
         " fuente_parsing, source, excerpt, entry_json)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         " ON CONFLICT(boletin_id, expediente) DO UPDATE SET"
         " marca=excluded.marca, class_nice=excluded.class_nice,"
         " clase_especial=excluded.clase_especial, titular=excluded.titular,"
-        " tramitante=excluded.tramitante, pais=excluded.pais,"
+        " tramitante=excluded.tramitante,"
+        " disposicion=COALESCE(excluded.disposicion, boletin_entries.disposicion),"
+        " tipo_disposicion=COALESCE(excluded.tipo_disposicion, boletin_entries.tipo_disposicion),"
+        " pais=excluded.pais,"
         " fecha_inscripcion=excluded.fecha_inscripcion,"
         " estatus=excluded.estatus, page=excluded.page,"
         " is_matcheable=excluded.is_matcheable,"
@@ -1622,7 +1641,8 @@ def boletin_entry_upsert(
         (
             r["boletin_id"], r["expediente"], r["marca"],
             r["class_nice"], r["clase_especial"], r["titular"],
-            r["tramitante"], r["pais"], r["fecha_inscripcion"], r["estatus"],
+            r["tramitante"], r["disposicion"], r["tipo_disposicion"],
+            r["pais"], r["fecha_inscripcion"], r["estatus"],
             r["page"], r["is_matcheable"], r["is_figura"],
             r["is_lema"], r["productos_servicios"],
             r["fuente_parsing"], r["source"], r["excerpt"],
@@ -1712,6 +1732,8 @@ class DetectionRow:
     needs_hermes_reverify: int = 0
     matched_with: Optional[str] = None
     risk_score: Optional[float] = None
+    disposicion: Optional[str] = None
+    tipo_disposicion: Optional[str] = None
 
 
 def _detection_from_row(row: sqlite3.Row) -> DetectionRow:
@@ -1744,6 +1766,8 @@ def detections_add(
     es_figura: int = 0,
     es_lema: int = 0,
     risk_score: Optional[float] = None,
+    disposicion: Optional[str] = None,
+    tipo_disposicion: Optional[str] = None,
 ) -> int:
     cur = conn.execute(
         "INSERT OR IGNORE INTO detections("
@@ -1751,8 +1775,8 @@ def detections_add(
         " expediente, mark_name, titular, class_nice, page,"
         " similarity, match_kind, source, confidence, raw_excerpt,"
         " matched_with, pais, fecha_inscripcion, fuente_parsing, es_figura, es_lema,"
-        " risk_score)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " risk_score, disposicion, tipo_disposicion)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             boletin_id,
             user_id,
@@ -1775,6 +1799,8 @@ def detections_add(
             es_figura,
             es_lema,
             risk_score,
+            disposicion,
+            tipo_disposicion,
         ),
     )
     return cur.lastrowid

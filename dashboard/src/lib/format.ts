@@ -82,3 +82,31 @@ export function sourceLabel(source: string): string {
   };
   return map[source] ?? source;
 }
+
+/** Etiqueta legible del tipo de disposición administrativa. */
+export function disposicionLabel(tipo: string | null | undefined): string {
+  const map: Record<string, string> = {
+    NEGACION: "Negada",
+    CONCESION: "Concedida",
+    CADUCA: "Caducada",
+    REVOCA: "Revocada",
+    INADMISIBLE: "Inadmisible",
+    DEVOLUCION_FORMA: "Devolución de forma",
+    DEVOLUCION_FONDO: "Devolución de fondo",
+  };
+  return tipo ? (map[tipo] ?? tipo) : "";
+}
+
+/** Color del badge según el tipo de disposición. */
+export function disposicionColor(tipo: string | null | undefined): string {
+  const map: Record<string, string> = {
+    NEGACION: "bg-red-100 text-red-700",
+    CONCESION: "bg-green-100 text-green-700",
+    CADUCA: "bg-gray-100 text-gray-700",
+    REVOCA: "bg-blue-100 text-blue-700",
+    INADMISIBLE: "bg-gray-100 text-gray-700",
+    DEVOLUCION_FORMA: "bg-yellow-100 text-yellow-700",
+    DEVOLUCION_FONDO: "bg-orange-100 text-orange-700",
+  };
+  return map[tipo ?? ""] ?? "bg-gray-100 text-gray-700";
+}

@@ -1319,3 +1319,143 @@ def test_export_isolated_by_user(
 
     r = client.get("/api/export/watchlist.csv", headers=_auth_header(other_token))
     assert "SOLO_DEL_OTRO" in r.content.decode("utf-8-sig")
+
+
+def test_disposicion_roundtrip_entry_y_detection(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """La disposición del parser llega a boletin_entries y la detección
+    creada por matching la hereda (Hermes structured también)."""
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+    wid = db.watchlist_add(tmp_db, user_id=agent_user.id, name="GLOBO", class_nice=38)
+    tmp_db.commit()
+
+    class _E:
+        expediente = "1994-010804"
+        marca = "GLOBO"
+        class_nice = 38
+        clase_niza = 38  # alias como MarcaEntry (lo usa el matcher)
+        clase_especial = None
+        titular = "TV GLOBO LTDA"
+        tramitante = None
+        disposicion = "RESUELVE CONFIRMA las Resoluciones que negaron el registro."
+        tipo_disposicion = "NEGACION"
+        pais = "VENEZUELA"
+        fecha_inscripcion = None
+        estatus = None
+        page = 1766
+        matcheable = True
+        es_figura = False
+        es_lema = False
+        productos_servicios = None
+        fuente_parsing = "disposiciones"
+        source = None
+        excerpt = "RESOLUCIÓN Vistos los recursos..."
+
+    db.boletin_entry_upsert(tmp_db, bid, _E())
+    tmp_db.commit()
+
+    entry = db.boletines_entries_list(tmp_db, bid)[0]
+    assert entry.disposicion.startswith("RESUELVE")
+    assert entry.tipo_disposicion == "NEGACION"
+
+    # Matching directo: la watchlist GLOBO clase 38 debe generar una
+    # detection con la disposición heredada.
+    from scripts.orchestration import matching_service
+    from scripts.config import get_settings
+    from scripts.matcher import combined
+    cfg = get_settings()
+    th = combined.Thresholds.from_settings(cfg.match_threshold, cfg.fuzzy_threshold)
+    created = matching_service.match_watchlist_for_boletin(
+        tmp_db, agent_user.id, bid, [_E()], th, source="pdfplumber_text",
+    )
+    assert created == 1
+    dets = db.detections_list_for_user(tmp_db, agent_user.id)
+    assert len(dets) == 1
+    assert dets[0].disposicion == entry.disposicion
+    assert dets[0].tipo_disposicion == "NEGACION"
+    assert dets[0].watchlist_id == wid
+
+    # API: entries y detections exponen la disposición.
+    r = client.get(f"/api/boletines/{bid}/entries", headers=_auth_header(agent_token))
+    assert r.json()[0]["tipo_disposicion"] == "NEGACION"
+    r = client.get("/api/detections", headers=_auth_header(agent_token))
+    assert r.json()[0]["tipo_disposicion"] == "NEGACION"
+    assert "CONFIRMA" in r.json()[0]["disposicion"]
+
+
+def test_structured_hermes_con_disposicion(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+):
+    """Hermes envía disposicion/tipo_disposicion en structured y la
+    detección creada la hereda."""
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, uid)
+    tmp_db.execute("UPDATE boletines SET hermes_processed_at=NULL WHERE id=?", (bid,))
+    # Watchlist para que el matching de structured cree la detection.
+    db.watchlist_add(tmp_db, user_id=uid, name="MARCA NEGRADA", class_nice=3)
+    tmp_db.commit()
+    os.environ["SERVICE_TOKEN_HERMES"] = "valid-hermes-token"
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+
+    entry = {
+        "expediente": "2026-000777",
+        "marca": "MARCA NEGRADA",
+        "clase_niza": 3,
+        "titular": "TITULAR CA",
+        "pais": "VENEZUELA",
+        "estatus": "NEGADA",
+        "pagina": 85,
+        "fuente": "hermes_vision",
+        "confianza": "high",
+        "disposicion": "RESUELVE se niega el registro solicitado.",
+        "tipo_disposicion": "NEGACION",
+    }
+    r = client.post(
+        f"/api/boletines/{bid}/structured",
+        json={"boletin_id": bid, "entries": [entry]},
+        headers={"X-Hermes-Token": "valid-hermes-token"},
+    )
+    assert r.status_code == 200
+
+    row = db.boletines_entries_list(tmp_db, bid)[0]
+    assert row.tipo_disposicion == "NEGACION"
+    dets = db.detections_list_for_user(tmp_db, uid)
+    assert dets and dets[0].tipo_disposicion == "NEGACION"
+
+
+def test_structured_rechaza_tipo_disposicion_invalido(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+):
+    """Un tipo_disposicion fuera del conjunto cerrado → 422."""
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, uid)
+    tmp_db.execute("UPDATE boletines SET hermes_processed_at=NULL WHERE id=?", (bid,))
+    tmp_db.commit()
+    os.environ["SERVICE_TOKEN_HERMES"] = "valid-hermes-token"
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+
+    entry = {
+        "expediente": "2026-000778",
+        "marca": "MARCA X",
+        "clase_niza": 3,
+        "titular": "TITULAR CA",
+        "estatus": "PUBLICADA",
+        "tipo_disposicion": "INVENTADO",
+    }
+    r = client.post(
+        f"/api/boletines/{bid}/structured",
+        json={"boletin_id": bid, "entries": [entry]},
+        headers={"X-Hermes-Token": "valid-hermes-token"},
+    )
+    assert r.status_code == 422

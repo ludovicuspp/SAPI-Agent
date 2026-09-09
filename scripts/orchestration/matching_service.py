@@ -143,6 +143,8 @@ def _match_watchlist_titular(
             raw_excerpt=entry.excerpt,
             pais=entry.pais,
             fecha_inscripcion=entry.fecha_inscripcion,
+            disposicion=getattr(entry, "disposicion", None),
+            tipo_disposicion=getattr(entry, "tipo_disposicion", None),
             fuente_parsing=getattr(entry, "fuente_parsing", None) or (
                 "hermes" if source != "pdfplumber_text" else "pdfplumber"
             ),
@@ -281,6 +283,8 @@ def _match_watchlist_marca(
             raw_excerpt=entry.excerpt,
             pais=entry.pais,
             fecha_inscripcion=entry.fecha_inscripcion,
+            disposicion=getattr(entry, "disposicion", None),
+            tipo_disposicion=getattr(entry, "tipo_disposicion", None),
             fuente_parsing=getattr(entry, "fuente_parsing", None) or (
                 "hermes" if source != "pdfplumber_text" else "pdfplumber"
             ),
@@ -344,7 +348,7 @@ def _entries_from_extraction_json(extraction_json: str) -> list[Any]:
     if not pages:
         return []
     parser_text = _build_parser_text(pages)
-    page_lookup, section_lookup = make_position_lookups(parser_text)
+    page_lookup, section_lookup, _disp = make_position_lookups(parser_text)
     parser = MarcaEntryParser(
         page_lookup=page_lookup, section_lookup=section_lookup
     )

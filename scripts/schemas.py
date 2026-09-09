@@ -31,6 +31,19 @@ EstatusLiteral = Literal[
     "SEGUNDA_PUBLICACION",
 ]
 
+# Tipo de disposición administrativa (resolución SAPI) que afecta a la
+# marca. Conjunto cerrado derivado del lenguaje real de las resoluciones
+# del boletín ("RESUELVE ..."): no inventar valores fuera de esta lista.
+DisposicionTipoLiteral = Literal[
+    "NEGACION",         # se niega el registro (o se confirma la negación)
+    "CONCESION",        # se concede el registro (con lapso de pago)
+    "CADUCA",           # se declara la caducidad por no uso
+    "REVOCA",           # se revoca la resolución previa
+    "INADMISIBLE",      # el recurso queda inadmisible
+    "DEVOLUCION_FORMA", # devuelta por examen de forma
+    "DEVOLUCION_FONDO", # devuelta por examen de fondo
+]
+
 
 # ── auth / users ───────────────────────────────────────────────
 
@@ -218,6 +231,8 @@ class BoletinEntryOut(BaseModel):
     clase_especial: Optional[str] = None
     titular: Optional[str] = None
     tramitante: Optional[str] = None
+    disposicion: Optional[str] = None
+    tipo_disposicion: Optional[DisposicionTipoLiteral] = None
     pais: Optional[str] = None
     fecha_inscripcion: Optional[str] = None
     estatus: Optional[str] = None
@@ -260,6 +275,8 @@ class DetectionOut(BaseModel):
     es_figura: bool = False
     es_lema: bool = False
     needs_hermes_reverify: bool = False
+    disposicion: Optional[str] = None
+    tipo_disposicion: Optional[DisposicionTipoLiteral] = None
 
 
 # ── /api/structured (Hermes → API) ────────────────────────────
@@ -273,6 +290,8 @@ class StructuredEntryIn(BaseModel):
     clase_niza: int = Field(ge=1, le=45)
     titular: str = Field(min_length=1, max_length=300)
     tramitante: Optional[str] = Field(default=None, max_length=300)
+    disposicion: Optional[str] = Field(default=None, max_length=4000)
+    tipo_disposicion: Optional[DisposicionTipoLiteral] = None
     pais: Optional[str] = Field(default=None, max_length=100)
     estatus: EstatusLiteral
     pagina: Optional[int] = Field(default=None, ge=1)

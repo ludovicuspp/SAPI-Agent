@@ -27,6 +27,9 @@ SECCIONES: dict[str, str | None] = {
     "RENOVACIONES DE MARCAS": "RENOVADA",
     "SOLICITUDES DE MARCAS DE PRODUCTOS DEVUELTAS": "DEVUELTA",
     "SOLICITUDES DE MARCAS DE SERVICIOS DEVUELTAS": "DEVUELTA",
+    # Variantes reales observadas en BPI 654 (secciones cortas).
+    "DEVUELTAS DE FORMA": "DEVUELTA",
+    "DEVUELTAS DE FONDO": "DEVUELTA",
     "OPOSICIONES": "OPOSICION",
     # Nombres comerciales
     "NOMBRES COMERCIALES CONCEDIDAS": "CONCEDIDA",
@@ -128,3 +131,40 @@ def detect_current_section(text: str, position: int) -> str | None:
                 best_pos = m.start()
                 best_estatus = estatus
     return best_estatus
+
+
+# ── Tipo de disposición implícito en la sección ────────────────
+
+# Algunas secciones implican de por sí un tipo de disposición
+# administrativa (p.ej. la distinción devolución de forma vs fondo).
+# Valores del conjunto cerrado ``DisposicionTipoLiteral`` en
+# ``scripts/schemas.py``.
+DISPOSICION_POR_SECCION: dict[str, str] = {
+    "DEVUELTAS DE FORMA": "DEVOLUCION_FORMA",
+    "DEVUELTAS DE FONDO": "DEVOLUCION_FONDO",
+    "SOLICITUDES DE MARCAS DE PRODUCTOS DEVUELTAS": "DEVOLUCION_FORMA",
+    "SOLICITUDES DE MARCAS DE SERVICIOS DEVUELTAS": "DEVOLUCION_FORMA",
+}
+
+_DISPOSICION_PATTERNS = [
+    (re.compile(re.escape(kw), re.IGNORECASE), tipo)
+    for kw, tipo in DISPOSICION_POR_SECCION.items()
+]
+
+
+def detect_current_disposicion(text: str, position: int) -> str | None:
+    """Devuelve el tipo de disposición de la última sección que implica
+    alguna, antes de ``position``. ``None`` si la sección no implica una.
+
+    Complementa a ``detect_current_section``: las secciones de devoluciones
+    distinguen forma vs fondo sin inventar estatus nuevos.
+    """
+    best_pos = -1
+    best_tipo: str | None = None
+    head = text[: max(0, position)]
+    for pat, tipo in _DISPOSICION_PATTERNS:
+        for m in pat.finditer(head):
+            if m.start() > best_pos:
+                best_pos = m.start()
+                best_tipo = tipo
+    return best_tipo

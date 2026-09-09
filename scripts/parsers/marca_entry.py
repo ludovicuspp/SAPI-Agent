@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from scripts.parsers.patterns.disposiciones import extract as extract_disposiciones
 from scripts.parsers.patterns.pattern_a import extract as extract_a
 from scripts.parsers.patterns.pattern_b import extract as extract_b
 from scripts.parsers.patterns.pattern_c import extract as extract_c
@@ -25,6 +26,8 @@ class MarcaEntry:
     clase_especial: Optional[str] = None  # 'LC' para lemas comerciales
     titular: Optional[str] = None
     tramitante: Optional[str] = None  # apoderado/agente; se llena vía Hermes
+    disposicion: Optional[str] = None  # texto de la resolución (pattern D)
+    tipo_disposicion: Optional[str] = None  # DisposicionTipoLiteral
     pais: Optional[str] = None
     fecha_inscripcion: Optional[str] = None  # ISO 8601 (YYYY-MM-DD)
     estatus: Optional[str] = None  # PUBLICADA, CONCEDIDA, NEGADA, ...
@@ -64,15 +67,22 @@ class MarcaEntryParser:
         self,
         page_lookup: Optional[callable] = None,
         section_lookup: Optional[callable] = None,
+        disposicion_lookup: Optional[callable] = None,
     ) -> None:
         """``page_lookup(text, position) -> int`` mapea una posición de
         carácter a número de página. Si es None, ``page`` queda None.
 
         ``section_lookup(text, position) -> str | None`` mapea una posición
         al estatus de la sección actual. Si es None, ``estatus`` queda None.
+
+        ``disposicion_lookup(text, position) -> str | None`` mapea una
+        posición al tipo de disposición implícito en la sección (p.ej.
+        devoluciones forma vs fondo). Si es None, ``tipo_disposicion``
+        queda solo lo que traigan los patterns.
         """
         self._page_lookup = page_lookup
         self._section_lookup = section_lookup
+        self._disposicion_lookup = disposicion_lookup
 
     def parse(self, text: str) -> list[MarcaEntry]:
         """Devuelve la lista de entradas deduplicada por expediente."""
@@ -144,6 +154,23 @@ class MarcaEntryParser:
             else:
                 seen[f"__{id(entry)}"] = entry
 
+        # Pattern D: resoluciones de la sección DISPOSICIONES
+        # ADMINISTRATIVAS. Citan solicitudes que normalmente no aparecen
+        # en otras secciones del boletín; si el expediente ya existe, se
+        # le adjuntan la disposición y su tipo sin pisar datos.
+        for raw in extract_disposiciones(text):
+            entry = self._build_entry(raw, fuente="disposiciones")
+            exp = entry.expediente
+            if exp and exp in seen:
+                existing = seen[exp]
+                if not existing.disposicion:
+                    existing.disposicion = entry.disposicion
+                if not existing.tipo_disposicion:
+                    existing.tipo_disposicion = entry.tipo_disposicion
+                continue
+            if exp:
+                seen[exp] = entry
+
         return list(seen.values())
 
     def _enrich(self, text: str, entries: list[MarcaEntry]) -> None:
@@ -160,6 +187,8 @@ class MarcaEntryParser:
                 entry.page = self._page_lookup(text, idx)
             if self._section_lookup:
                 entry.estatus = self._section_lookup(text, idx)
+            if self._disposicion_lookup and not entry.tipo_disposicion:
+                entry.tipo_disposicion = self._disposicion_lookup(text, idx)
 
     def _build_entry(self, raw: dict, fuente: str) -> MarcaEntry:
         marca = raw.get("marca")
@@ -170,6 +199,8 @@ class MarcaEntryParser:
             clase_especial=raw.get("clase_especial"),
             titular=raw.get("titular"),
             tramitante=raw.get("tramitante"),
+            disposicion=raw.get("disposicion"),
+            tipo_disposicion=raw.get("tipo_disposicion"),
             pais=raw.get("pais"),
             fecha_inscripcion=raw.get("fecha_inscripcion"),
             matcheable=marca is not None,

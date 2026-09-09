@@ -136,10 +136,10 @@ def make_position_lookups(parser_text: str):
 
     Precomputa una sola vez los offsets de los marcadores de página y de
     las secciones sobre el texto completo. Devuelve ``(page_lookup,
-    section_lookup)``, funciones con la firma ``(text, position) -> v``
-    que el parser usa en ``_enrich``. Esto evita reescanear el texto por
-    cada entrada (O(n) por entrada → O(log n)), lo que colgaba el parsing
-    de boletines de 1800+ páginas.
+    section_lookup, disposicion_lookup)``, funciones con la firma
+    ``(text, position) -> v`` que el parser usa en ``_enrich``. Esto evita
+    reescanear el texto por cada entrada (O(n) por entrada → O(log n)),
+    lo que colgaba el parsing de boletines de 1800+ páginas.
     """
     import bisect as _bisect
 
@@ -156,6 +156,22 @@ def make_position_lookups(parser_text: str):
     sec_items.sort(key=lambda x: x[0])
     sec_starts = [o for o, _ in sec_items]
 
+    disp_items = [
+        (m.start(), tipo)
+        for pat, tipo in boletin_header._DISPOSICION_PATTERNS
+        for m in pat.finditer(parser_text)
+    ]
+
+    # Timeline combinada de TODOS los headers de sección (con estatus o
+    # con disposición implícita): la disposición vigente se "apaga" al
+    # entrar en una sección que no implica ninguna.
+    all_items = sorted(
+        [(o, "sec", v) for o, v in sec_items]
+        + [(o, "disp", v) for o, v in disp_items],
+        key=lambda x: x[0],
+    )
+    all_starts = [o for o, _, _ in all_items]
+
     def page_lookup(text: str, position: int):
         i = _bisect.bisect_right(page_starts, max(0, position)) - 1
         if i < 0:
@@ -168,7 +184,14 @@ def make_position_lookups(parser_text: str):
             return None
         return sec_items[j][1]
 
-    return page_lookup, section_lookup
+    def disposicion_lookup(text: str, position: int):
+        j = _bisect.bisect_right(all_starts, max(0, position)) - 1
+        if j < 0:
+            return None
+        kind, value = all_items[j][1], all_items[j][2]
+        return value if kind == "disp" else None
+
+    return page_lookup, section_lookup, disposicion_lookup
 
 
 # ── Pipeline principal ─────────────────────────────────────────
@@ -303,10 +326,12 @@ def process_pdf(
         # Parser multi-formato. Precomputamos índices página y sección una
         # sola vez (O(log n) por entrada en vez de O(n), que colgaba el
         # parsing en boletines de 1800+ páginas).
-        page_lookup, section_lookup = make_position_lookups(parser_text)
+        page_lookup, section_lookup, disposicion_lookup = make_position_lookups(parser_text)
 
         parser = MarcaEntryParser(
-            page_lookup=page_lookup, section_lookup=section_lookup,
+            page_lookup=page_lookup,
+            section_lookup=section_lookup,
+            disposicion_lookup=disposicion_lookup,
         )
         entries, stats = parser.parse_with_stats(parser_text)
 

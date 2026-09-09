@@ -229,3 +229,227 @@ class TestExtractBrandLines:
         text = "DOMICILIO: CARACAS\nPAÍS: VENEZUELA\nEN CLASE: 25"
         lines = extract_brand_lines(text)
         assert lines == []
+
+
+class TestDisposicionesAdministrativas:
+    """Pattern D: resoluciones de la sección DISPOSICIONES ADMINISTRATIVAS.
+
+    Los ejemplos replican la estructura real del BPI 654 (tomos XVII y
+    XVIII): preámbulo ministerial, tabla N°/SOLICITUD/MARCA/CLASE/
+    SOLICITANTE con líneas separadas y fórmula "RESUELVE" al final.
+    """
+
+    @staticmethod
+    def _resolucion_confirmacion() -> str:
+        return (
+            "CARACAS, 26 DE MAYO DE 2026\n"
+            "216°, 167° y 27°\n"
+            "RESOLUCIÓN Nº\n"
+            "Vistos los recursos de reconsideración interpuestos conforme a lo\n"
+            "dispuesto en el artículo 94 de la Ley Orgánica de Procedimientos\n"
+            "Administrativos, contra las Resoluciones No. 1087, 126, 306, 401 y 879;\n"
+            "que negaron los siguientes signos por encontrarse incursos en las\n"
+            "causales prohibitivas contenidas en la Ley de Propiedad Industrial:\n"
+            "N°\n"
+            "SOLICITUD\n"
+            "MARCA\n"
+            "CLASE\n"
+            "SOLICITANTE\n"
+            "1.\n"
+            "1994-010804\n"
+            "GLOBO\n"
+            "38 INT\n"
+            "TV GLOBO LTDA\n"
+            "2.\n"
+            "2010-015133\n"
+            "PUROSOYA\n"
+            "29 INT\n"
+            "A.B. INVERSIONES, C.A.\n"
+            "Ahora bien, de la revisión exhaustiva de los documentos que reposan en\n"
+            "los expedientes administrativos se evidencia que no consta poder.\n"
+            "En virtud de las consideraciones que anteceden, este Despacho resuelve:\n"
+            "RESUELVE\n"
+            "Conforme a lo dispuesto en los artículos 86 y 49 numeral 6 de la Ley\n"
+            "Orgánica de Procedimientos Administrativos, este Registro decide:\n"
+            "1.- INADMISIBLE los escritos interpuestos.\n"
+            "2.- CONFIRMA las Resoluciones No. 1087, 126, 306, 401 y 879.\n"
+            "Comuníquese y Publíquese.\n"
+        )
+
+    @staticmethod
+    def _resolucion_concesion() -> str:
+        return (
+            "CARACAS, 29 DE MAYO DE 2026\n"
+            "RESOLUCIÓN Nº\n"
+            "Vistos los recursos de reconsideración interpuestos contra las\n"
+            "Resoluciones No. 128, 807 y 177; que negaron los siguientes signos:\n"
+            "N°\n"
+            "SOLICITUD\n"
+            "MARCA\n"
+            "CLASE\n"
+            "SOLICITANTE\n"
+            "1.\n"
+            "2017-001123\n"
+            "(GRÁFICA)\n"
+            "39 INT\n"
+            "CORPORACION MEGALIMENTOS 2011, C.A.\n"
+            "2.\n"
+            "2012-014434\n"
+            "MONSTER\n"
+            "REHAB\n"
+            "5 INT\n"
+            "MONSTER ENERGY COMPANY\n"
+            "RESUELVE\n"
+            "Este Registro de la Propiedad Industrial, decide:\n"
+            "1. Declarar CON LUGAR los Recursos de Reconsideración interpuestos.\n"
+            "2. REVOCAR las Resoluciones No. 128, 807 y 177.\n"
+            "3. CONCEDER los signos a favor de sus actuales solicitantes.\n"
+            "La parte interesada debe cargar en el sistema en línea WEBPI el pago\n"
+            "de los montos correspondientes en un lapso de treinta (30) días\n"
+            "hábiles, contados a partir de la entrada en vigencia del Boletín.\n"
+        )
+
+    def test_extrae_solicitudes_con_marca_y_tipo(self):
+        from scripts.parsers.patterns.disposiciones import extract
+
+        out = list(extract(self._resolucion_confirmacion()))
+        exps = {e["expediente"] for e in out}
+        assert exps == {"1994-010804", "2010-015133"}
+        by_exp = {e["expediente"]: e for e in out}
+        assert by_exp["1994-010804"]["marca"] == "GLOBO"
+        assert by_exp["1994-010804"]["clase_niza"] == 38
+        assert by_exp["1994-010804"]["titular"] == "TV GLOBO LTDA"
+        assert by_exp["2010-015133"]["titular"] == "A.B. INVERSIONES, C.A."
+        # La decisión confirma resoluciones que negaron → NEGACION.
+        assert by_exp["1994-010804"]["tipo_disposicion"] == "NEGACION"
+        assert "RESUELVE" in by_exp["1994-010804"]["disposicion"]
+        assert all(e["matcheable"] for e in out)
+
+    def test_resolucion_concesion_precede_a_revoca(self):
+        from scripts.parsers.patterns.disposiciones import extract
+
+        out = list(extract(self._resolucion_concesion()))
+        by_exp = {e["expediente"]: e for e in out}
+        assert {"2017-001123", "2012-014434"} == set(by_exp)
+        # Efecto neto: se conceden los signos (no la revocación previa).
+        assert by_exp["2012-014434"]["tipo_disposicion"] == "CONCESION"
+        # Marca de dos líneas se une; clase con INT se parsea.
+        assert by_exp["2012-014434"]["marca"] == "MONSTER REHAB"
+        assert by_exp["2012-014434"]["clase_niza"] == 5
+        assert by_exp["2017-001123"]["marca"] == "(GRÁFICA)"
+        assert by_exp["2017-001123"]["titular"] == "CORPORACION MEGALIMENTOS 2011, C.A."
+
+    def test_resolucion_caducidad(self):
+        from scripts.parsers.patterns.disposiciones import extract
+
+        text = (
+            "CARACAS, 1 DE JUNIO DE 2026\n"
+            "RESOLUCIÓN Nº\n"
+            "Vistos la solicitud de caducidad por no uso contra el registro\n"
+            "de la marca siguiente:\n"
+            "1.\n"
+            "2011-012345\n"
+            "KEEWAY MOTOR\n"
+            "12 INT\n"
+            "QIANJIANG-KEEWAY IPARI\n"
+            "RESUELVE\n"
+            "PRIMERO: este Registro declara la caducidad del registro marcario.\n"
+        )
+        out = list(extract(text))
+        assert len(out) == 1
+        assert out[0]["tipo_disposicion"] == "CADUCA"
+
+    def test_nombre_marca_con_resolucion_prefix_no_es_bloque(self):
+        """Marcas que empiezan con 'RESOLUCIÓN...' en otras secciones no
+        generan entradas (no hay preámbulo ministerial)."""
+        from scripts.parsers.patterns.disposiciones import extract
+
+        text = (
+            "Insc. 2020-009999 del 5 DE ABRIL DE 2020\n"
+            "SOLICITADA POR: TALLERES SL País: VENEZUELA\n"
+            "RESOLUCIÓN DE CONFLICTOS. ELABORACIÓN DE OPINIONES LEGALES\n"
+            "EN CLASE: 35\n"
+            "PARA DISTINGUIR: CONSULTORÍA.\n"
+        )
+        assert list(extract(text)) == []
+
+    def test_resolucion_sin_solicitudes_no_emite_nada(self):
+        from scripts.parsers.patterns.disposiciones import extract
+
+        text = (
+            "CARACAS, 3 DE JULIO DE 2026\n"
+            "RESOLUCIÓN Nº\n"
+            "Vistos lo anterior, se aprueba el informe de gestión 2025.\n"
+            "RESUELVE\n"
+            "Aprobar el informe de gestión.\n"
+        )
+        assert list(extract(text)) == []
+
+    def test_integracion_parser_completo(self):
+        """El parser completo (A→B→C→D) incorpora las entradas de
+        disposiciones y no rompe las de otras secciones."""
+        from scripts.parsers.marca_entry import MarcaEntryParser
+
+        text = (
+            "--- página 85 ---\n"
+            "MARCAS CON ORDEN DE PUBLICACIÓN\n"
+            "Insc. 2026-001001 del 1 DE MAYO DE 2026\n"
+            "SOLICITADA POR: ACME SA País: VENEZUELA\n"
+            "ACME ROJA\n"
+            "EN CLASE: 5\n"
+            "PARA DISTINGUIR: FARMACOS.\n"
+            + self._resolucion_confirmacion()
+        )
+        entries = MarcaEntryParser().parse(text)
+        by_exp = {e.expediente: e for e in entries}
+        assert by_exp["2026-001001"].marca == "ACME ROJA"
+        assert by_exp["1994-010804"].marca == "GLOBO"
+        assert by_exp["1994-010804"].fuente_parsing == "disposiciones"
+        assert by_exp["1994-010804"].tipo_disposicion == "NEGACION"
+
+    def test_resolucion_devueltas_de_forma(self):
+        """Formato real BPI 654 pág. 958: clase antes de la marca, 'NC'
+        sin clase, titular con prosa 'Domicilio:' y columna TRAMITANTE."""
+        from scripts.parsers.patterns.disposiciones import extract
+
+        text = (
+            "Caracas, 01 de junio de 2026\n"
+            "RESOLUCIÓN N°\n"
+            "DEVUELTAS DE FORMA\n"
+            "VISTAS LAS SOLICITUDES DE MARCAS COMERCIALES, QUE A CONTINUACIÓN SE\n"
+            "ESPECIFICAN, Y POR CUANTO LOS INTERESADOS NO CUMPLIERON CON LOS\n"
+            "REQUISITOS FORMALES DE PRESENTACIÓN, SE DEVUELVEN DICHAS SOLICITUDES\n"
+            "A FIN DE QUE SE DÉ CUMPLIMIENTO A LO EXIGIDO DENTRO DE UN LAPSO DE\n"
+            "TREINTA (30) DÍAS HÁBILES CONTADOS A PARTIR DE LA FECHA DE LA\n"
+            "PUBLICACIÓN DEL PRESENTE BOLETÍN.\n"
+            "SOLICITUD\n"
+            "CLASE\n"
+            "NOMBRE DE LAS MARCAS\n"
+            "TITULAR\n"
+            "TRAMITANTE\n"
+            "2016-017396\n"
+            "36\n"
+            "SOFITEL CENTRO DE ATENCION TELEFONICO\n"
+            "BANCO SOFITASA BANCO UNIVERSAL,\n"
+            "C.A. (BANCO SOFITASA, C.A.) Domicilio:\n"
+            "SAN CRISTOBAL - EDO. TACHIRA País:\n"
+            "VENEZUELA\n"
+            "CARRASCOSA DE MENA JOSE MANUEL\n"
+            "2016-017764\n"
+            "NC\n"
+            "MACUTO\n"
+            "CENTRO COMERCIAL MACUTO I, C.A.\n"
+            "Domicilio: Maracay Estado Aragua País:\n"
+            "VENEZUELA\n"
+            "EDUARDO C. DIAZ SANTOS\n"
+        )
+        out = {e["expediente"]: e for e in extract(text)}
+        assert set(out) == {"2016-017396", "2016-017764"}
+        # Tipo por marcador de sección del bloque, no por la decisión.
+        assert all(e["tipo_disposicion"] == "DEVOLUCION_FORMA" for e in out.values())
+        assert out["2016-017396"]["marca"] == "SOFITEL CENTRO DE ATENCION TELEFONICO"
+        assert out["2016-017396"]["clase_niza"] == 36
+        assert out["2016-017764"]["marca"] == "MACUTO"
+        assert out["2016-017764"]["clase_niza"] is None
+        # Titular best-effort: se corta en la prosa del domicilio.
+        assert out["2016-017764"]["titular"] == "CENTRO COMERCIAL MACUTO I, C.A."

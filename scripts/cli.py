@@ -344,7 +344,7 @@ def cmd_extract_entries(args):
             data = json.loads(row["extraction_json"])
             pages = data.get("pages", [])
             parser_text = processor._build_parser_text(pages)
-            page_lookup, section_lookup = processor.make_position_lookups(
+            page_lookup, section_lookup, _disp = processor.make_position_lookups(
                 parser_text
             )
             parser = MarcaEntryParser(

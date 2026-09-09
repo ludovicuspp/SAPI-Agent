@@ -51,6 +51,8 @@ def _entry_to_out(e: db.BoletinEntryRow) -> BoletinEntryOut:
         clase_especial=e.clase_especial,
         titular=e.titular,
         tramitante=getattr(e, "tramitante", None),
+        disposicion=getattr(e, "disposicion", None),
+        tipo_disposicion=getattr(e, "tipo_disposicion", None),
         pais=e.pais,
         fecha_inscripcion=e.fecha_inscripcion,
         estatus=e.estatus,

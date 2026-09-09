@@ -139,6 +139,8 @@ async def submit_structured(
                     else entry.fecha_inscripcion
                 ),
                 fuente_parsing="hermes",
+                disposicion=getattr(entry, "disposicion", None),
+                tipo_disposicion=getattr(entry, "tipo_disposicion", None),
             )
             entries_added += 1
 

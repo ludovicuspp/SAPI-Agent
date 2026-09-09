@@ -39,6 +39,8 @@ class StructuredEntry:
     clase_niza: int
     titular: str
     tramitante: Optional[str] = None
+    disposicion: Optional[str] = None
+    tipo_disposicion: Optional[str] = None
     pais: Optional[str] = None
     estatus: str = "PUBLICADA"
     pagina: Optional[int] = None

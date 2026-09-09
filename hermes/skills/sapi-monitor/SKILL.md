@@ -125,6 +125,14 @@ Reglas del esquema (NO inventes valores fuera de estos conjuntos):
   identificables, no envíes esa entrada.
 - `tramitante` es opcional (apoderado/agente que tramita). Inclúyelo
   solo si el boletín lo muestra; omítelo antes que inventarlo.
+- `disposicion` (opcional): texto de la resolución SAPI que afecta a la
+  marca cuando la entrada proviene de "Disposiciones Administrativas"
+  (recursos, caducidad, revocaciones). Cita la parte de la decisión
+  ("RESUELVE ..."), no el argumento legal completo.
+- `tipo_disposicion` (opcional) ∈ `{NEGACION, CONCESION, CADUCA,
+  REVOCA, INADMISIBLE, DEVOLUCION_FORMA, DEVOLUCION_FONDO}` según el
+  efecto neto de la resolución sobre la marca. Omítelo si no queda
+  claro.
 
 ### 3. Entregar a la API
 

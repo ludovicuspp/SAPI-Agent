@@ -142,6 +142,8 @@ export interface Detection {
   fuente_parsing: string | null;
   es_figura: boolean;
   es_lema: boolean;
+  disposicion?: string | null;
+  tipo_disposicion?: string | null;
 }
 
 export interface Summary {
@@ -183,6 +185,8 @@ export interface BoletinEntry {
   clase_especial: string | null;
   titular: string | null;
   tramitante?: string | null;
+  disposicion?: string | null;
+  tipo_disposicion?: string | null;
   pais: string | null;
   fecha_inscripcion: string | null;
   estatus: string | null;

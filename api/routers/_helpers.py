@@ -176,6 +176,8 @@ def detection_to_out(r: db.DetectionRow) -> DetectionOut:
         es_figura=bool(r.es_figura),
         es_lema=bool(r.es_lema),
         needs_hermes_reverify=bool(getattr(r, "needs_hermes_reverify", 0)),
+        disposicion=getattr(r, "disposicion", None),
+        tipo_disposicion=getattr(r, "tipo_disposicion", None),
     )
 
 

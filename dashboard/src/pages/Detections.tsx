@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { request } from "@/lib/api";
-import { formatSimilarity, sourceLabel, formatDate, formatClass } from "@/lib/format";
+import { formatSimilarity, sourceLabel, formatDate, formatClass, disposicionLabel, disposicionColor } from "@/lib/format";
 import { ExportButtons } from "@/components/ExportButtons";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -178,6 +178,21 @@ export default function Detections() {
               <dt className="text-gray-500">Origen:</dt><dd>{originLabel(selected)}</dd>
               <dt className="text-gray-500">Match:</dt><dd>{selected.match_kind}</dd>
             </dl>
+            {selected.tipo_disposicion && (
+              <div className="mt-4">
+                <div className="flex items-center gap-2">
+                  <div className="text-sm text-gray-500">Disposición administrativa</div>
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${disposicionColor(selected.tipo_disposicion)}`}>
+                    {disposicionLabel(selected.tipo_disposicion)}
+                  </span>
+                </div>
+                {selected.disposicion && (
+                  <p className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs text-gray-700">
+                    {selected.disposicion}
+                  </p>
+                )}
+              </div>
+            )}
             {selected.raw_excerpt && (
               <pre className="mt-4 max-h-40 overflow-auto rounded bg-gray-50 p-3 text-xs text-gray-700">
                 {selected.raw_excerpt}

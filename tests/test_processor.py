@@ -499,7 +499,7 @@ class TestProcessor:
         from scripts.orchestration.processor import make_position_lookups
 
         text = sample_boletin_text
-        page_lookup, section_lookup = make_position_lookups(text)
+        page_lookup, section_lookup, _disp = make_position_lookups(text)
 
         # La 1ª entrada está en la página 8, sección PUBLICADA.
         idx = text.find("Insc. 2015-015976")
@@ -533,7 +533,7 @@ class TestProcessor:
             )
         text = "\n".join(parts)
 
-        page_lookup, section_lookup = make_position_lookups(text)
+        page_lookup, section_lookup, _disp = make_position_lookups(text)
         parser = MarcaEntryParser(
             page_lookup=page_lookup, section_lookup=section_lookup
         )
@@ -617,3 +617,54 @@ class TestNotifierMocked:
         )
         assert delivery.sent == 0
         assert delivery.failed == []
+
+    def test_disposicion_lookup_por_seccion(self, sample_boletin_text):
+        """El tercer lookup asigna el tipo de disposición implícito en la
+        sección (devoluciones de forma vs fondo, BPI 654)."""
+        from scripts.orchestration.processor import make_position_lookups
+
+        text = (
+            "--- página 5 ---\n"
+            "DEVUELTAS DE FORMA\n"
+            "Insc. 2026-005001 del 1 DE JUNIO DE 2026\n"
+            "SOLICITADA POR: X SA País: VENEZUELA\n"
+            "MARCA FORMA\nEN CLASE: 3\nPARA DISTINGUIR: COSMÉTICOS.\n"
+            "--- página 9 ---\n"
+            "DEVUELTAS DE FONDO\n"
+            "Insc. 2026-005002 del 2 DE JUNIO DE 2026\n"
+            "SOLICITADA POR: Y SA País: VENEZUELA\n"
+            "MARCA FONDO\nEN CLASE: 5\nPARA DISTINGUIR: PRODUCTOS.\n"
+            "--- página 12 ---\n"
+            "MARCAS CON ORDEN DE PUBLICACIÓN\n"
+            "Insc. 2026-005003 del 3 DE JUNIO DE 2026\n"
+            "SOLICITADA POR: Z SA País: VENEZUELA\n"
+            "MARCA PUB\nEN CLASE: 9\nPARA DISTINGUIR: VARIOS.\n"
+        )
+        page_lookup, section_lookup, disp_lookup = make_position_lookups(text)
+
+        idx_forma = text.find("Insc. 2026-005001")
+        idx_fondo = text.find("Insc. 2026-005002")
+        idx_pub = text.find("Insc. 2026-005003")
+
+        # Sección y estatus coherentes (DEVUELTA es estatus existente).
+        assert section_lookup(text, idx_forma) == "DEVUELTA"
+        assert section_lookup(text, idx_fondo) == "DEVUELTA"
+        assert disp_lookup(text, idx_forma) == "DEVOLUCION_FORMA"
+        assert disp_lookup(text, idx_fondo) == "DEVOLUCION_FONDO"
+        # Sección sin implicancia de disposición → None.
+        assert disp_lookup(text, idx_pub) is None
+
+        # Integración con el parser: el entry recibe el tipo por sección.
+        from scripts.parsers.marca_entry import MarcaEntryParser
+        parser = MarcaEntryParser(
+            page_lookup=page_lookup,
+            section_lookup=section_lookup,
+            disposicion_lookup=disp_lookup,
+        )
+        entries = {e.expediente: e for e in parser.parse(text)}
+        assert entries["2026-005001"].tipo_disposicion == "DEVOLUCION_FORMA"
+        assert entries["2026-005002"].tipo_disposicion == "DEVOLUCION_FONDO"
+        assert entries["2026-005003"].tipo_disposicion is None
+        # Las entradas de secciones normales siguen intactas.
+        assert entries["2026-005001"].estatus == "DEVUELTA"
+        assert entries["2026-005003"].estatus == "PUBLICADA"

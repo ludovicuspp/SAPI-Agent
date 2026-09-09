@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { request } from "@/lib/api";
 import { watchBoletinProgress } from "@/lib/ws";
-import { statusLabel, statusColor, stepLabel, isHermesInProgress, formatClass } from "@/lib/format";
+import { statusLabel, statusColor, stepLabel, isHermesInProgress, formatClass, disposicionLabel, disposicionColor } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -294,6 +294,14 @@ export default function BoletinDetail() {
                     <TableCell>
                       {e.is_lema && <Badge variant="secondary">Lema</Badge>}
                       {e.is_figura && <Badge variant="outline">Figura</Badge>}
+                      {e.tipo_disposicion && (
+                        <span
+                          className={`ml-1 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${disposicionColor(e.tipo_disposicion)}`}
+                          title={e.disposicion ?? undefined}
+                        >
+                          {disposicionLabel(e.tipo_disposicion)}
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -371,6 +379,19 @@ export default function BoletinDetail() {
                 {selectedEntry.productos_servicios || "—"}
               </p>
             </div>
+            {selectedEntry.tipo_disposicion && (
+              <div className="mt-4">
+                <div className="flex items-center gap-2">
+                  <div className="text-sm text-gray-500">Disposición administrativa</div>
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${disposicionColor(selectedEntry.tipo_disposicion)}`}>
+                    {disposicionLabel(selectedEntry.tipo_disposicion)}
+                  </span>
+                </div>
+                <p className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-xs text-gray-700">
+                  {selectedEntry.disposicion || "—"}
+                </p>
+              </div>
+            )}
             {selectedEntry.excerpt && (
               <pre className="mt-4 max-h-60 overflow-auto rounded bg-gray-50 p-3 text-xs text-gray-700 whitespace-pre-wrap">
                 {selectedEntry.excerpt}
