@@ -196,6 +196,91 @@ def test_alerts_list_filtra_por_portfolio(tmp_db: sqlite3.Connection):
     assert db.alerts_list_for_user(tmp_db, user.id, portfolio_id=pf1, estado="pendiente")
 
 
+def test_merge_con_own_status(tmp_db: sqlite3.Connection):
+    user = _user(tmp_db, "a@example.com")
+    pf = db.portfolio_add(tmp_db, user.id, "ACME VENEZUELA", class_nice=25)
+    bid1 = _boletin(
+        tmp_db, uploaded_by=user.id, filename="bp652.pdf", bulletin_number=652,
+        fecha_publicacion="2026-04-10",
+        entries=[_entry("", "acme venezuela", class_nice=25, estatus="PUBLICADA", page=5)],
+    )
+    bid2 = _boletin(
+        tmp_db, uploaded_by=user.id, filename="bp654.pdf", bulletin_number=654,
+        fecha_publicacion="2026-06-15", period="2026-06 (Junio 2026)",
+        entries=[],
+    )
+    det = db.detections_add(
+        tmp_db, boletin_id=bid2, user_id=user.id, mark_name="acme venezuela",
+        similarity=1.0, match_kind="own_status", source="pdfplumber_text",
+        confidence="high", portfolio_id=pf, expediente="2026-005555",
+        class_nice=25, page=8, tipo_disposicion="CONCESION",
+    )
+    tmp_db.commit()
+
+    info = derivar_expediente(tmp_db, db.portfolio_get(tmp_db, pf, user.id), user_id=user.id)
+    assert info["estado"] == "CONCEDIDA"
+    assert len(info["hitos"]) == 2
+    mas_reciente = info["hitos"][0]
+    assert mas_reciente["origen"] == "deteccion"
+    assert mas_reciente["detection_id"] == det
+    assert mas_reciente["entry_id"] is None
+    assert mas_reciente["boletin_id"] == bid2
+    # El hito de boletín sigue presente.
+    assert any(h["origen"] == "boletin" and h["boletin_id"] == bid1 for h in info["hitos"])
+
+
+def test_merge_conflicto_no_afecta_estado(tmp_db: sqlite3.Connection):
+    user = _user(tmp_db, "a@example.com")
+    pf = db.portfolio_add(tmp_db, user.id, "ACME VENEZUELA", class_nice=25)
+    bid1 = _boletin(
+        tmp_db, uploaded_by=user.id, filename="bp652.pdf", bulletin_number=652,
+        fecha_publicacion="2026-04-10",
+        entries=[_entry("", "acme venezuela", class_nice=25, estatus="PUBLICADA", page=5)],
+    )
+    bid2 = _boletin(
+        tmp_db, uploaded_by=user.id, filename="bp654.pdf", bulletin_number=654,
+        fecha_publicacion="2026-06-15", period="2026-06 (Junio 2026)",
+        entries=[],
+    )
+    # Conflicto más reciente: la marca es idéntica pero es de un tercero.
+    db.detections_add(
+        tmp_db, boletin_id=bid2, user_id=user.id, mark_name="acme venezuela",
+        similarity=1.0, match_kind="conflict", source="pdfplumber_text",
+        confidence="high", portfolio_id=pf, expediente="2026-005555",
+        class_nice=25, page=8, tipo_disposicion="DEVOLUCION_FONDO",
+    )
+    tmp_db.commit()
+
+    info = derivar_expediente(tmp_db, db.portfolio_get(tmp_db, pf, user.id), user_id=user.id)
+    # El estado propio NO cambia por el conflicto ajeno.
+    assert info["estado"] == "PUBLICADA"
+    assert len(info["hitos"]) == 2
+    assert info["hitos"][0]["match_kind"] == "conflict"
+    assert info["hitos"][0]["es_propio"] is False
+
+
+def test_dedupe_prefiere_deteccion_con_disposicion(tmp_db: sqlite3.Connection):
+    user = _user(tmp_db, "a@example.com")
+    pf = db.portfolio_add(tmp_db, user.id, "ACME VENEZUELA", class_nice=25)
+    bid = _boletin(
+        tmp_db, uploaded_by=user.id, filename="bp652.pdf", bulletin_number=652,
+        fecha_publicacion="2026-04-10",
+        entries=[_entry("2026-005555", "acme venezuela", class_nice=25, estatus="PUBLICADA", page=5)],
+    )
+    db.detections_add(
+        tmp_db, boletin_id=bid, user_id=user.id, mark_name="acme venezuela",
+        similarity=1.0, match_kind="own_status", source="pdfplumber_text",
+        confidence="high", portfolio_id=pf, expediente="2026-005555",
+        class_nice=25, page=5, tipo_disposicion="CONCESION",
+    )
+    tmp_db.commit()
+
+    info = derivar_expediente(tmp_db, db.portfolio_get(tmp_db, pf, user.id), user_id=user.id)
+    assert len(info["hitos"]) == 1
+    assert info["estado"] == "CONCEDIDA"
+    assert info["hitos"][0]["origen"] == "deteccion"
+
+
 def test_estado_from_hit_variants():
     cases = {
         ("PUBLICADA", None): "PUBLICADA",

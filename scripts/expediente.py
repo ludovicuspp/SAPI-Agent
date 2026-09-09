@@ -60,20 +60,30 @@ def _marca_variants(name: str) -> list[str]:
 
 def _hitos_for_portfolio(
     conn: Any, portfolio: db.PortfolioRow, user_id: int | None
-) -> list[dict]:
-    """Hitos del expediente. ``user_id=None`` (admin) ve todos."""
-    if portfolio.expediente and norm(portfolio.expediente):
-        hitos = db.expediente_hitos(
-            conn, user_id=user_id, expediente=portfolio.expediente
-        )
-        if hitos:
-            return hitos
+) -> tuple[list[dict], bool]:
+    """Hitos candidatos del expediente."""
+
+    def por_expediente() -> tuple[list[dict], bool]:
+        if portfolio.expediente and norm(portfolio.expediente):
+            rows = db.expediente_hitos(
+                conn, user_id=user_id, expediente=portfolio.expediente
+            )
+            if rows:
+                return rows, True
+        return [], False
+
+    filas, matched = por_expediente()
+    if matched:
+        return filas, True
     # Fallback: por nombre + clase.
-    return db.expediente_hitos(
-        conn,
-        user_id=user_id,
-        marca_variants=_marca_variants(portfolio.name),
-        class_nice=portfolio.class_nice,
+    return (
+        db.expediente_hitos(
+            conn,
+            user_id=user_id,
+            marca_variants=_marca_variants(portfolio.name),
+            class_nice=portfolio.class_nice,
+        ),
+        False,
     )
 
 
@@ -82,27 +92,61 @@ def derivar_expediente(
 ) -> dict:
     """Línea de tiempo del trámite de una marca del portfolio.
 
-    Devuelve: ``hitos`` (ordenados de más reciente a más antiguo),
-    ``estado`` derivado del último hito (o ``SIN_MOVIMIENTO``),
-    ``expedientes`` (números distintos observados) y ``marcadas``
-    (nombres distintos observados).
+    Combina dos fuentes:
+    - ``boletines``: apariciones directas del expediente (o nombre+clase)
+      en los boletines extraídos visible para el usuario.
+    - ``detecciones``: las que el matcher ligó a este portfolio
+      (importa ver los conflictos que le aparecen a la marca).
+
+    Devuelve: ``hitos`` (más reciente primero), ``estado`` derivado de
+    las apariciones propias del trámite (entries o `match_kind="own_status"`),
+    ``expedientes`` y ``marcadas`` (números/nombres distintos observados).
     """
-    raw = _hitos_for_portfolio(conn, portfolio, user_id)
+    raw, por_expediente = _hitos_for_portfolio(conn, portfolio, user_id)
+
+    # Apariciones que el matcher ligó a este portfolio.
+    if user_id is not None:
+        det_rows = db.detections_for_portfolio(conn, portfolio.id, user_id)
+    else:
+        det_rows = db.detections_for_portfolio(
+            conn, portfolio.id, portfolio.user_id
+        )
 
     # Filtro de precisión: solo apariciones cuyo nombre coincide
-    # normalizado con la marca del portfolio.
+    # normalizado con la marca del portfolio (omitido si se matcheó
+    # por número de expediente exacto: es la caja propia del trámite).
     norm_name = norm(portfolio.name)
-    hitos: list[dict] = []
-    seen: set[tuple] = set()
-    for h in raw:
-        marca_norm = norm(h.get("marca") or "")
-        if not (marca_norm and marca_norm == norm_name):
-            continue
+    por_clave: dict[tuple, dict] = {}
+
+    def _peso_hito(h: dict) -> int:
+        # Prioriza el hito que aporta estado (disposición o trámite propio).
+        return (1 if h.get("tipo_disposicion") else 0) + (
+            1 if h.get("es_propio") else 0
+        )
+
+    def _meter(h: dict) -> None:
         clave = (h["boletin_id"], h["expediente"], h["page"])
-        if clave in seen:
-            continue
-        seen.add(clave)
-        hitos.append(h)
+        prev = por_clave.get(clave)
+        if prev is None or _peso_hito(h) > _peso_hito(prev):
+            por_clave[clave] = h
+
+    for h in raw:
+        if not por_expediente:
+            marca_norm = norm(h.get("marca") or "")
+            if not (marca_norm and marca_norm == norm_name):
+                continue
+        h["es_propio"] = True
+        h["origen"] = "boletin"
+        h["detection_id"] = None
+        _meter(h)
+
+    # Apariciones que el matcher ligó a este portfolio.
+    for d in det_rows:
+        d["es_propio"] = d.get("match_kind") == "own_status"
+        d["entry_id"] = None
+        _meter(d)
+
+    hitos = list(por_clave.values())
 
     hitos.sort(
         key=lambda h: (
@@ -116,8 +160,10 @@ def derivar_expediente(
     expedientes = sorted({h["expediente"] for h in hitos if h["expediente"]})
     marcadas = sorted({h["marca"] for h in hitos if h["marca"]})
 
+    # Estado: solo artefactos propios del trámite.
+    propios = [h for h in hitos if h.get("es_propio")]
     estado = "SIN_MOVIMIENTO"
-    ultimo = hitos[0] if hitos else None
+    ultimo = propios[0] if propios else None
     if ultimo:
         estado = estado_from_hit(ultimo.get("estatus"), ultimo.get("tipo_disposicion"))
 

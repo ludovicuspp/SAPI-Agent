@@ -440,7 +440,11 @@ class AlertOut(BaseModel):
 
 class HitoExpediente(BaseModel):
     boletin_id: int
-    entry_id: int
+    entry_id: Optional[int] = None
+    detection_id: Optional[int] = None
+    origen: str = "boletin"
+    match_kind: Optional[str] = None
+    similarity: Optional[float] = None
     expediente: Optional[str] = None
     marca: Optional[str] = None
     class_nice: Optional[int] = None

@@ -1933,6 +1933,34 @@ def detections_list_for_user(
     return [_detection_from_row(r) for r in rows]
 
 
+def detections_for_portfolio(
+    conn: sqlite3.Connection, portfolio_id: int, user_id: int
+) -> list[dict]:
+    """Apariciones detectadas de una marca del portfolio (visible al usuario).
+
+    Devuelve filas en forma de hito (mismas claves que ``expediente_hitos``)
+    unidas a los datos del boletín, ordenadas de más reciente a más antiguo.
+    """
+    rows = conn.execute(
+        "SELECT"
+        " d.id AS detection_id, d.boletin_id, d.expediente,"
+        " d.mark_name AS marca, d.class_nice, d.titular, d.page,"
+        " d.similarity, d.match_kind, d.confidence,"
+        " d.source, d.disposicion, d.tipo_disposicion,"
+        " b.bulletin_number AS boletin_number,"
+        " b.period AS boletin_period,"
+        " b.fecha_publicacion, b.filename AS boletin_filename,"
+        " 'deteccion' AS origen"
+        " FROM detections d"
+        " JOIN boletines b ON b.id = d.boletin_id"
+        " WHERE d.portfolio_id = ? AND d.user_id = ?"
+        " ORDER BY b.fecha_publicacion IS NULL, b.fecha_publicacion DESC,"
+        " b.id DESC, d.id DESC",
+        (portfolio_id, user_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def detections_pending_notification(
     conn: sqlite3.Connection, user_id: int, limit: int = 100
 ) -> list[DetectionRow]:

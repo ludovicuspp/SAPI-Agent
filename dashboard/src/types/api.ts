@@ -216,7 +216,11 @@ export type EstadoExpediente =
 
 export interface ExpedienteHito {
   boletin_id: number;
-  entry_id: number;
+  entry_id: number | null;
+  detection_id: number | null;
+  origen: "boletin" | "deteccion";
+  match_kind: string | null;
+  similarity: number | null;
   expediente: string | null;
   marca: string | null;
   class_nice: number | null;

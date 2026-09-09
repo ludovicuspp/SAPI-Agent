@@ -94,13 +94,18 @@ export default function Expediente() {
           )}
           <div className="relative ml-3 border-l-2 border-gray-200 space-y-6 pl-6">
             {data.hitos.map((h) => (
-              <div key={h.entry_id} className="relative">
+              <div key={`${h.origen}-${h.detection_id ?? h.entry_id}`} className="relative">
                 <div className="absolute -left-8 top-1 h-3 w-3 rounded-full border-2 border-white bg-gray-400" />
                 <div className="flex flex-wrap items-baseline gap-2">
                   <span className="font-medium text-sm">{fechaDe(h)}</span>
                   <span className="text-xs text-gray-500">BPI {h.boletin_number ?? "—"}</span>
                   {h.estatus && <Badge variant="outline" className="text-xs">{h.estatus}</Badge>}
                   {h.tipo_disposicion && <Badge className="text-xs">{disposicionLabel(h.tipo_disposicion)}</Badge>}
+                  {h.origen === "deteccion" && (
+                    <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium uppercase text-blue-600">
+                      {h.match_kind === "own_status" ? "propia" : "conflicto"}
+                    </span>
+                  )}
                   {h.class_nice != null && <span className="text-xs text-gray-500">Clase {formatClass(h.class_nice)}</span>}
                   {h.page && <span className="text-xs text-gray-400">pág. {h.page}</span>}
                 </div>
