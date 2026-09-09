@@ -138,6 +138,8 @@ def derivar_expediente(
         h["es_propio"] = True
         h["origen"] = "boletin"
         h["detection_id"] = None
+        h.setdefault("match_kind", None)
+        h.setdefault("similarity", None)
         _meter(h)
 
     # Apariciones que el matcher ligó a este portfolio.
