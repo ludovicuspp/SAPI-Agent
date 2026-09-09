@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { request } from "@/lib/api";
 import { formatSimilarity, sourceLabel, formatDate, formatClass } from "@/lib/format";
+import { ExportButtons } from "@/components/ExportButtons";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import type { Detection, MatchKind } from "@/types/api";
@@ -76,7 +77,10 @@ export default function Detections() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Detecciones</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Detecciones</h1>
+        <ExportButtons dataset="detections" />
+      </div>
 
       <div className="flex flex-wrap items-center gap-3">
         {(["all", "conflict", "similar", "own_status"] as KindFilter[]).map((k) => (

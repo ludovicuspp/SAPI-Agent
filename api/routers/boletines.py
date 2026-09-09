@@ -50,6 +50,7 @@ def _entry_to_out(e: db.BoletinEntryRow) -> BoletinEntryOut:
         class_nice=e.class_nice,
         clase_especial=e.clase_especial,
         titular=e.titular,
+        tramitante=getattr(e, "tramitante", None),
         pais=e.pais,
         fecha_inscripcion=e.fecha_inscripcion,
         estatus=e.estatus,

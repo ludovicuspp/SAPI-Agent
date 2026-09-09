@@ -182,6 +182,7 @@ class BoletinOut(BaseModel):
     file_sha256: str
     bulletin_number: Optional[int]
     period: Optional[str]
+    tomo: Optional[str] = None
     pages: Optional[int]
     status: str
     needs_hermes_review: bool
@@ -216,6 +217,7 @@ class BoletinEntryOut(BaseModel):
     class_nice: Optional[int] = None
     clase_especial: Optional[str] = None
     titular: Optional[str] = None
+    tramitante: Optional[str] = None
     pais: Optional[str] = None
     fecha_inscripcion: Optional[str] = None
     estatus: Optional[str] = None
@@ -270,6 +272,7 @@ class StructuredEntryIn(BaseModel):
     marca: str = Field(min_length=1, max_length=300)
     clase_niza: int = Field(ge=1, le=45)
     titular: str = Field(min_length=1, max_length=300)
+    tramitante: Optional[str] = Field(default=None, max_length=300)
     pais: Optional[str] = Field(default=None, max_length=100)
     estatus: EstatusLiteral
     pagina: Optional[int] = Field(default=None, ge=1)

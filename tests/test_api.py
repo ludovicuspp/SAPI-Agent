@@ -1119,3 +1119,203 @@ def test_mark_stale_extracting_as_failed(
         (orphan_never_started, orphan_stuck, orphan_legacy),
     ).fetchall()
     assert len(err_rows) == 3
+
+
+# ── Fase 0: tomo, tramitante y export .csv/.md ───────────────────
+
+
+def test_boletin_tomo_persisted_and_exposed(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """El tomo detectado por el parser se persiste y sale en la API."""
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+    db.boletines_mark_extracted(
+        tmp_db,
+        boletin_id=bid,
+        pages=10,
+        extraction_payload={},
+        bulletin_number=651,
+        period="2026-07 (Julio 2026)",
+        needs_hermes_review=False,
+        tomo="XII",
+    )
+    tmp_db.commit()
+
+    row = db.boletines_get(tmp_db, bid)
+    assert row.tomo == "XII"
+
+    r = client.get(f"/api/boletines/{bid}", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert r.json()["tomo"] == "XII"
+
+
+def test_boletin_entry_tramitante_roundtrip(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """El tramitante de una entrada se persiste y expone en /entries."""
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+
+    class _E:
+        expediente = "E-99"
+        marca = "MARCA TRAM"
+        class_nice = 5
+        clase_especial = None
+        titular = "TITULAR SA"
+        tramitante = "BERKOW & PÉREZ"
+        pais = "VENEZUELA"
+        fecha_inscripcion = None
+        estatus = "PUBLICADA"
+        page = 3
+        matcheable = True
+        es_figura = False
+        es_lema = False
+        productos_servicios = None
+        fuente_parsing = "pattern_a"
+        source = None
+        excerpt = "x"
+
+    db.boletin_entry_upsert(tmp_db, bid, _E())
+    tmp_db.commit()
+
+    row = db.boletines_entries_list(tmp_db, bid)[0]
+    assert row.tramitante == "BERKOW & PÉREZ"
+
+    r = client.get(f"/api/boletines/{bid}/entries", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert r.json()[0]["tramitante"] == "BERKOW & PÉREZ"
+
+
+def test_structured_entry_accepts_tramitante(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+):
+    """Hermes puede enviar tramitante en el payload structured."""
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, uid)
+    tmp_db.execute(
+        "UPDATE boletines SET hermes_processed_at=NULL WHERE id=?", (bid,)
+    )
+    tmp_db.commit()
+    os.environ["SERVICE_TOKEN_HERMES"] = "valid-hermes-token"
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+
+    entry = {
+        "expediente": "2026-000001",
+        "marca": "MARCA HERMES",
+        "clase_niza": 9,
+        "titular": "TITULAR CA",
+        "tramitante": "AGENTE X",
+        "pais": "VENEZUELA",
+        "estatus": "PUBLICADA",
+        "pagina": 1,
+        "fuente": "hermes_vision",
+        "confianza": "high",
+    }
+    r = client.post(
+        f"/api/boletines/{bid}/structured",
+        json={"boletin_id": bid, "entries": [entry]},
+        headers={"X-Hermes-Token": "valid-hermes-token"},
+    )
+    assert r.status_code == 200
+
+    row = db.boletines_entries_list(tmp_db, bid)[0]
+    assert row.tramitante == "AGENTE X"
+
+
+def test_export_requires_auth(client: TestClient):
+    r = client.get("/api/export/detections.csv")
+    assert r.status_code == 401
+
+
+def test_export_unknown_dataset_or_format(client: TestClient, agent_token: str):
+    h = _auth_header(agent_token)
+    assert client.get("/api/export/whatever.csv", headers=h).status_code == 404
+    assert client.get("/api/export/detections.xlsx", headers=h).status_code == 404
+
+
+def test_export_watchlist_csv_and_md(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """Export de watchlist en .csv y .md con el contenido del usuario."""
+    db.watchlist_add(
+        tmp_db, user_id=agent_user.id, name="ACME", class_nice=35,
+        productos_servicios="software", match_family=True,
+    )
+    tmp_db.commit()
+
+    r = client.get("/api/export/watchlist.csv", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert "text/csv" in r.headers["content-type"]
+    assert "attachment" in r.headers["content-disposition"]
+    text = r.content.decode("utf-8-sig")
+    assert "ACME" in text and "Marca" in text
+
+    r = client.get("/api/export/watchlist.md", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    assert "text/markdown" in r.headers["content-type"]
+    md = r.content.decode("utf-8")
+    assert md.startswith("# ") and "ACME" in md
+
+
+def test_export_portfolio_and_detections_md(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """Portfolio export incluye tramitante; detections exporta filas."""
+    db.portfolio_add(
+        tmp_db, user_id=agent_user.id, name="ACME",
+        expediente="2026-000123", class_nice=35, tramitante="BERKOW & PÉREZ",
+    )
+    bid, _ = _make_extracted_boletin(tmp_db, tmp_path, agent_user.id)
+    db.detections_add(
+        tmp_db, boletin_id=bid, user_id=agent_user.id, watchlist_id=None,
+        mark_name="ACME", similarity=0.92, match_kind="similar",
+        source="pdfplumber_text", confidence="high", expediente="2026-000123",
+    )
+    tmp_db.commit()
+
+    r = client.get("/api/export/portfolio.csv", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    text = r.content.decode("utf-8-sig")
+    assert "ACME" in text and "BERKOW & PÉREZ" in text and "Tramitante" in text
+
+    r = client.get("/api/export/detections.md", headers=_auth_header(agent_token))
+    assert r.status_code == 200
+    md = r.content.decode("utf-8")
+    assert "ACME" in md
+
+
+def test_export_isolated_by_user(
+    client: TestClient,
+    tmp_db: sqlite3.Connection,
+    tmp_path: Path,
+    agent_user: db.UserRow,
+    agent_token: str,
+):
+    """El export solo descarga datos del usuario autenticado."""
+    other, other_token = _make_second_agent(tmp_db)
+    db.watchlist_add(tmp_db, user_id=other.id, name="SOLO_DEL_OTRO", class_nice=1)
+    tmp_db.commit()
+
+    r = client.get("/api/export/watchlist.csv", headers=_auth_header(agent_token))
+    text = r.content.decode("utf-8-sig")
+    assert "SOLO_DEL_OTRO" not in text
+
+    r = client.get("/api/export/watchlist.csv", headers=_auth_header(other_token))
+    assert "SOLO_DEL_OTRO" in r.content.decode("utf-8-sig")

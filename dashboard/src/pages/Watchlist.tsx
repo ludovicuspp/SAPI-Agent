@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { request } from "@/lib/api";
+import { ExportButtons } from "@/components/ExportButtons";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,7 +44,10 @@ export default function WatchlistPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Watchlist</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Watchlist</h1>
+        <ExportButtons dataset="watchlist" />
+      </div>
 
       <form onSubmit={add} className="flex flex-wrap gap-2">
         <Input placeholder="Nombre de marca" value={name} onChange={(e) => setName(e.target.value)} className="w-48" required />

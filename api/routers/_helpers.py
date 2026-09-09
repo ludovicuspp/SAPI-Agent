@@ -124,6 +124,7 @@ def boletin_to_out(r: db.BoletinRow, conn: sqlite3.Connection) -> BoletinOut:
         file_sha256=r.file_sha256,
         bulletin_number=r.bulletin_number,
         period=r.period,
+        tomo=getattr(r, "tomo", None),
         pages=r.pages,
         status=r.status,
         needs_hermes_review=bool(r.needs_hermes_review),

@@ -100,6 +100,7 @@ antes de enviar.
   "marca": "TRIPLE MILLONARIO",
   "clase_niza": 35,
   "titular": "RAUL ENRIQUE ARTIGAS",
+  "tramitante": "PEREZ & ASOCIADOS",
   "pais": "VENEZUELA",
   "estatus": "PUBLICADA",
   "pagina": 8,
@@ -122,6 +123,8 @@ Reglas del esquema (NO inventes valores fuera de estos conjuntos):
   inventar). Mejor omitir la entrada que inventar un dato.
 - `expediente`, `marca` y `titular` son obligatorios; si no son
   identificables, no envíes esa entrada.
+- `tramitante` es opcional (apoderado/agente que tramita). Inclúyelo
+  solo si el boletín lo muestra; omítelo antes que inventarlo.
 
 ### 3. Entregar a la API
 

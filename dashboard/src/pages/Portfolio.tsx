@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { request, uploadFile, getToken } from "@/lib/api";
+import { ExportButtons } from "@/components/ExportButtons";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -115,6 +116,7 @@ export default function PortfolioPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Portfolio</h1>
         <div className="flex gap-2">
+          <ExportButtons dataset="portfolio" />
           <label className="text-sm">
             <Button type="button" variant="outline" size="sm">
               Importar CSV

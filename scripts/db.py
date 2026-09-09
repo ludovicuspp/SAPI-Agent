@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS boletines (
     file_sha256 TEXT NOT NULL,
     bulletin_number INTEGER,
     period TEXT,
+    tomo TEXT,
     pages INTEGER,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending','extracting','extracted',
@@ -139,6 +140,7 @@ CREATE TABLE IF NOT EXISTS boletin_entries (
     class_nice INTEGER,
     clase_especial TEXT,
     titular TEXT,
+    tramitante TEXT,
     pais TEXT,
     fecha_inscripcion TEXT,
     estatus TEXT,
@@ -257,6 +259,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("boletines", "entries_hermes_pending", "INTEGER NOT NULL DEFAULT 0"),
         ("boletines", "entries_figura", "INTEGER NOT NULL DEFAULT 0"),
         ("boletines", "entries_lema", "INTEGER NOT NULL DEFAULT 0"),
+        ("boletines", "tomo", "TEXT"),
         ("boletines", "progress_step", "TEXT"),
         ("boletines", "progress_current_page", "INTEGER"),
         ("boletines", "progress_total_pages", "INTEGER"),
@@ -274,6 +277,8 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("detections", "es_lema", "INTEGER NOT NULL DEFAULT 0"),
         ("detections", "needs_hermes_reverify", "INTEGER NOT NULL DEFAULT 0"),
         ("detections", "matched_with", "TEXT"),
+        # Gemelo digital: tramitante visible por entrada del boletín.
+        ("boletin_entries", "tramitante", "TEXT"),
         # Portfolio ampliado (módulo portfolio: 17 campos + historial).
         ("portfolio", "pais", "TEXT NOT NULL DEFAULT 'Venezuela'"),
         ("portfolio", "etiqueta", "TEXT"),
@@ -1138,6 +1143,7 @@ class BoletinRow:
     error: Optional[str]
     uploaded_at: str
     processed_at: Optional[str]
+    tomo: Optional[str] = None
     entries_matcheables: int = 0
     entries_hermes_pending: int = 0
     entries_figura: int = 0
@@ -1185,6 +1191,7 @@ def boletines_mark_extracted(
     entries_hermes_pending: int = 0,
     entries_figura: int = 0,
     entries_lema: int = 0,
+    tomo: Optional[str] = None,
 ) -> None:
     conn.execute(
         "UPDATE boletines SET"
@@ -1193,6 +1200,7 @@ def boletines_mark_extracted(
         " extraction_json = ?,"
         " bulletin_number = ?,"
         " period = ?,"
+        " tomo = ?,"
         " needs_hermes_review = ?,"
         " entries_matcheables = ?,"
         " entries_hermes_pending = ?,"
@@ -1207,6 +1215,7 @@ def boletines_mark_extracted(
             json.dumps(extraction_payload, ensure_ascii=False),
             bulletin_number,
             period,
+            tomo,
             1 if needs_hermes_review else 0,
             entries_matcheables,
             entries_hermes_pending,
@@ -1495,6 +1504,7 @@ class BoletinEntryRow:
     class_nice: Optional[int] = None
     clase_especial: Optional[str] = None
     titular: Optional[str] = None
+    tramitante: Optional[str] = None
     pais: Optional[str] = None
     fecha_inscripcion: Optional[str] = None
     estatus: Optional[str] = None
@@ -1530,6 +1540,7 @@ def _entry_insert_values(
         or getattr(e, "clase_niza", None) or getattr(e, "clase", None),
         "clase_especial": getattr(e, "clase_especial", None),
         "titular": getattr(e, "titular", None),
+        "tramitante": getattr(e, "tramitante", None),
         "pais": getattr(e, "pais", None),
         "fecha_inscripcion": _fecha,
         "estatus": getattr(e, "estatus", None),
@@ -1564,14 +1575,15 @@ def boletin_entry_upsert(
     conn.execute(
         "INSERT INTO boletin_entries("
         " boletin_id, expediente, marca, class_nice, clase_especial,"
-        " titular, pais, fecha_inscripcion, estatus, page,"
+        " titular, tramitante, pais, fecha_inscripcion, estatus, page,"
         " is_matcheable, is_figura, is_lema, productos_servicios,"
         " fuente_parsing, source, excerpt, entry_json)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         " ON CONFLICT(boletin_id, expediente) DO UPDATE SET"
         " marca=excluded.marca, class_nice=excluded.class_nice,"
         " clase_especial=excluded.clase_especial, titular=excluded.titular,"
-        " pais=excluded.pais, fecha_inscripcion=excluded.fecha_inscripcion,"
+        " tramitante=excluded.tramitante, pais=excluded.pais,"
+        " fecha_inscripcion=excluded.fecha_inscripcion,"
         " estatus=excluded.estatus, page=excluded.page,"
         " is_matcheable=excluded.is_matcheable,"
         " is_figura=excluded.is_figura, is_lema=excluded.is_lema,"
@@ -1581,7 +1593,7 @@ def boletin_entry_upsert(
         (
             r["boletin_id"], r["expediente"], r["marca"],
             r["class_nice"], r["clase_especial"], r["titular"],
-            r["pais"], r["fecha_inscripcion"], r["estatus"],
+            r["tramitante"], r["pais"], r["fecha_inscripcion"], r["estatus"],
             r["page"], r["is_matcheable"], r["is_figura"],
             r["is_lema"], r["productos_servicios"],
             r["fuente_parsing"], r["source"], r["excerpt"],

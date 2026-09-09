@@ -68,6 +68,7 @@ export default function BoletinDetail() {
       [
         e.marca,
         e.titular,
+        e.tramitante,
         e.expediente,
         e.pais,
         e.estatus,
@@ -215,6 +216,10 @@ export default function BoletinDetail() {
           <div className="mt-1 text-xl font-bold">{progress?.pages ?? boletin.pages ?? "…"}</div>
         </Card>
         <Card className="p-4">
+          <div className="text-sm text-gray-500">Tomo</div>
+          <div className="mt-1 text-xl font-bold">{boletin.tomo ?? "—"}</div>
+        </Card>
+        <Card className="p-4">
           <div className="text-sm text-gray-500">Entries matcheables</div>
           <div className="mt-1 text-xl font-bold">{progress?.entries_matcheables ?? boletin.entries_matcheables}</div>
         </Card>
@@ -257,6 +262,7 @@ export default function BoletinDetail() {
                   <TableHead>Marca</TableHead>
                   <TableHead>Expediente</TableHead>
                   <TableHead>Titular</TableHead>
+                  <TableHead>Tramitante</TableHead>
                   <TableHead>Clase</TableHead>
                   <TableHead>País</TableHead>
                   <TableHead>Productos / Servicios</TableHead>
@@ -275,6 +281,7 @@ export default function BoletinDetail() {
                     <TableCell className="font-medium">{e.marca ?? "—"}</TableCell>
                     <TableCell>{e.expediente}</TableCell>
                     <TableCell>{e.titular ?? "—"}</TableCell>
+                    <TableCell>{e.tramitante ?? "—"}</TableCell>
                     <TableCell>{formatClass(e.class_nice)}</TableCell>
                     <TableCell>{e.pais ?? "—"}</TableCell>
                     <TableCell className="max-w-xs">
@@ -292,7 +299,7 @@ export default function BoletinDetail() {
                 ))}
                 {filteredEntries.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center text-gray-500">
+                    <TableCell colSpan={10} className="text-center text-gray-500">
                       No hay marcas que coincidan
                     </TableCell>
                   </TableRow>
@@ -342,6 +349,7 @@ export default function BoletinDetail() {
             <dl className="grid grid-cols-2 gap-2 text-sm">
               <dt className="text-gray-500">Expediente:</dt><dd>{selectedEntry.expediente}</dd>
               <dt className="text-gray-500">Titular:</dt><dd>{selectedEntry.titular ?? "—"}</dd>
+              <dt className="text-gray-500">Tramitante:</dt><dd>{selectedEntry.tramitante ?? "—"}</dd>
               <dt className="text-gray-500">Clase:</dt><dd>{formatClass(selectedEntry.class_nice)}</dd>
               <dt className="text-gray-500">País:</dt><dd>{selectedEntry.pais ?? "—"}</dd>
               <dt className="text-gray-500">Estatus:</dt><dd>{selectedEntry.estatus ?? "—"}</dd>

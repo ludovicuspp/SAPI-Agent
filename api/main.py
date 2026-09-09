@@ -15,6 +15,7 @@ from api.routers import (
     auth,
     boletines,
     detections,
+    export,
     metrics,
     portfolio,
     structured,
@@ -102,6 +103,7 @@ def create_app() -> FastAPI:
     _app.include_router(detections.router, prefix="/api/detections", tags=["detections"])
     _app.include_router(structured.router, prefix="/api/boletines", tags=["structured"])
     _app.include_router(summary.router, prefix="/api/summary", tags=["summary"])
+    _app.include_router(export.router, prefix="/api/export", tags=["export"])
     _app.include_router(metrics.router, prefix="/api/admin/metrics", tags=["metrics"])
 
     # Versionado de API: /api/v0/* se mapea a /api/* (compat).

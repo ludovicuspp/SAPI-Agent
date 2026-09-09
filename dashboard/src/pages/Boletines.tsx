@@ -38,6 +38,7 @@ export default function Boletines() {
           <TableRow>
             <TableHead>Archivo</TableHead>
             <TableHead>No.</TableHead>
+            <TableHead>Tomo</TableHead>
             <TableHead>Páginas</TableHead>
             <TableHead>Entries</TableHead>
             {isAdmin && <TableHead>Subido por</TableHead>}
@@ -68,6 +69,7 @@ export default function Boletines() {
                   )}
                 </TableCell>
                 <TableCell>{b.bulletin_number ?? "—"}</TableCell>
+                <TableCell>{b.tomo ?? "—"}</TableCell>
                 <TableCell>{b.pages ?? "…"}</TableCell>
                 <TableCell>{b.entries_matcheables}</TableCell>
                 {isAdmin && <TableCell>{b.uploaded_by_name ?? "—"}</TableCell>}
@@ -99,9 +101,9 @@ export default function Boletines() {
           })}
           {boletines.length === 0 && (
             <TableRow>
-              <TableCell colSpan={isAdmin ? 8 : 7} className="text-center text-gray-500">
-                No hay boletines
-              </TableCell>
+                <TableCell colSpan={isAdmin ? 9 : 8} className="text-center text-gray-500">
+                  No hay boletines
+                </TableCell>
             </TableRow>
           )}
         </TableBody>

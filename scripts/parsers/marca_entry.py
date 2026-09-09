@@ -24,6 +24,7 @@ class MarcaEntry:
     clase_niza: Optional[int] = None
     clase_especial: Optional[str] = None  # 'LC' para lemas comerciales
     titular: Optional[str] = None
+    tramitante: Optional[str] = None  # apoderado/agente; se llena vía Hermes
     pais: Optional[str] = None
     fecha_inscripcion: Optional[str] = None  # ISO 8601 (YYYY-MM-DD)
     estatus: Optional[str] = None  # PUBLICADA, CONCEDIDA, NEGADA, ...
@@ -168,6 +169,7 @@ class MarcaEntryParser:
             clase_niza=raw.get("clase_niza"),
             clase_especial=raw.get("clase_especial"),
             titular=raw.get("titular"),
+            tramitante=raw.get("tramitante"),
             pais=raw.get("pais"),
             fecha_inscripcion=raw.get("fecha_inscripcion"),
             matcheable=marca is not None,

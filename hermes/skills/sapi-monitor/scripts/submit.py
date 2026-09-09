@@ -38,6 +38,7 @@ class StructuredEntry:
     marca: str
     clase_niza: int
     titular: str
+    tramitante: Optional[str] = None
     pais: Optional[str] = None
     estatus: str = "PUBLICADA"
     pagina: Optional[int] = None

@@ -92,6 +92,7 @@ export interface Boletin {
   file_sha256: string;
   bulletin_number: number | null;
   period: string | null;
+  tomo?: string | null;
   pages: number | null;
   status: BoletinStatus;
   needs_hermes_review: boolean;
@@ -181,6 +182,7 @@ export interface BoletinEntry {
   class_nice: number | null;
   clase_especial: string | null;
   titular: string | null;
+  tramitante?: string | null;
   pais: string | null;
   fecha_inscripcion: string | null;
   estatus: string | null;

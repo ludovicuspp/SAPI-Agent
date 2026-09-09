@@ -350,6 +350,7 @@ def process_pdf(
             extraction_payload=extraction_payload,
             bulletin_number=metadata.bulletin_number,
             period=metadata.period,
+            tomo=metadata.tomo,
             needs_hermes_review=needs_hermes,
             entries_matcheables=stats.entries_matcheables,
             entries_hermes_pending=stats.entries_hermes_pending,

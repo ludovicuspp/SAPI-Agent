@@ -92,3 +92,33 @@ export function wsBase(): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}`;
 }
+
+/** Descarga un archivo del API (export .csv/.md) llevando el token. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (res.status === 401) {
+    clearToken();
+    window.location.href = "/login";
+    throw new ApiError(401, "No autorizado");
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    const detail = body.detail;
+    throw new ApiError(
+      res.status,
+      typeof detail === "string" ? detail : "Error al descargar",
+    );
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
