@@ -17,11 +17,14 @@ from scripts import portfolio_import
 from scripts.config import get_settings
 from api.deps import get_db, get_current_user
 from api.routers._helpers import (
+    alert_to_out,
     history_to_out,
     portfolio_to_out,
     run_retroactive_analysis,
 )
 from scripts.schemas import (
+    ExpedienteOut,
+    HitoExpediente,
     PortfolioHistoryOut,
     PortfolioImportResult,
     PortfolioIn,
@@ -216,3 +219,62 @@ async def portfolio_history(
         history_to_out(h)
         for h in db.portfolio_history_list(conn, portfolio_id, user.id)
     ]
+
+
+@router.get("/{portfolio_id}/expediente", response_model=ExpedienteOut)
+async def expediente(
+    portfolio_id: int,
+    user: db.UserRow = Depends(get_current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Línea de tiempo del trámite de la marca del portfolio.
+
+    Muestra hitos derivados de los boletines extraídos y las alertas
+    de lapso asociadas (solo avisar plazos).
+    """
+    from scripts.expediente import derivar_expediente
+
+    portfolio = _get_owned(conn, portfolio_id, user)
+    admin_all = user.role == "admin"
+    info = derivar_expediente(
+        conn,
+        portfolio,
+        user_id=None if admin_all else user.id,
+    )
+    # Persiste el historial (idempotente por (portfolio_id, boletin_id)).
+    for h in info["hitos"]:
+        db.portfolio_history_add(
+            conn,
+            portfolio_id=portfolio.id,
+            user_id=user.id,
+            boletin_id=h["boletin_id"],
+            boletin_period=h.get("boletin_period"),
+            boletin_number=h.get("boletin_number"),
+            estado=info["estado"],
+            snapshot={
+                "expediente": h.get("expediente"),
+                "marca": h.get("marca"),
+                "class_nice": h.get("class_nice"),
+                "estatus": h.get("estatus"),
+                "tipo_disposicion": h.get("tipo_disposicion"),
+                "page": h.get("page"),
+                "boletin_number": h.get("boletin_number"),
+                "boletin_period": h.get("boletin_period"),
+            },
+        )
+    try:
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    alerts_rows = db.alerts_list_for_user(
+        conn, user.id, portfolio_id=portfolio_id, limit=500
+    )
+    return ExpedienteOut(
+        portfolio_id=portfolio.id,
+        user_id=user.id,
+        estado=info["estado"],
+        hitos=[HitoExpediente(**h) for h in info["hitos"]],
+        expedientes=info["expedientes"],
+        marcadas=info["marcadas"],
+        alerts=[alert_to_out(conn, a) for a in alerts_rows],
+    )

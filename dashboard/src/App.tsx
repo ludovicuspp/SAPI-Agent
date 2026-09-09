@@ -10,6 +10,7 @@ import Detections from "@/pages/Detections";
 import AlertsPage from "@/pages/Alerts";
 import WatchlistPage from "@/pages/Watchlist";
 import PortfolioPage from "@/pages/Portfolio";
+import ExpedientePage from "@/pages/Expediente";
 import UsersPage from "@/pages/Users";
 import MonitoringPage from "@/pages/Monitoring";
 import NotFound from "@/pages/NotFound";
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="watchlist" element={<WatchlistPage />} />
           <Route path="lapsos" element={<AlertsPage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="portfolio/:id" element={<ExpedientePage />} />
           <Route
             path="users"
             element={

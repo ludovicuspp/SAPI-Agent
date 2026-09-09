@@ -6,8 +6,10 @@ from datetime import datetime
 from typing import Optional
 
 from scripts import db
+from scripts.lapsos import derivar_estado, dias_restantes
 from scripts.orchestration.matching_service import analyze_boletines_for_user
 from scripts.schemas import (
+    AlertOut,
     BoletinOut,
     DetectionOut,
     PortfolioHistoryOut,
@@ -189,3 +191,39 @@ def _parse_dt(val: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(val)
     except (ValueError, TypeError):
         return None
+
+
+def alert_to_out(conn: sqlite3.Connection, r: db.AlertRow) -> AlertOut:
+    """Convierte una AlertRow en AlertOut enriquecido con datos de boletín y detección."""
+    bol = conn.execute(
+        "SELECT bulletin_number, period, filename FROM boletines WHERE id = ?",
+        (r.boletin_id,),
+    ).fetchone()
+    det = conn.execute(
+        "SELECT match_kind, disposicion, tipo_disposicion"
+        " FROM detections WHERE id = ?",
+        (r.detection_id,),
+    ).fetchone()
+    return AlertOut(
+        id=r.id,
+        user_id=r.user_id,
+        detection_id=r.detection_id,
+        boletin_id=r.boletin_id,
+        lapse_key=r.lapse_key,
+        label=r.label,
+        marca=r.marca,
+        expediente=r.expediente,
+        fecha_publicacion=r.fecha_publicacion,
+        fecha_limite=r.fecha_limite,
+        dias_habiles=r.dias_habiles,
+        estado=derivar_estado(r),
+        dias_restantes=dias_restantes(r),
+        created_at=r.created_at,
+        resolved_at=r.resolved_at,
+        boletin_number=bol["bulletin_number"] if bol else None,
+        boletin_period=bol["period"] if bol else None,
+        boletin_filename=bol["filename"] if bol else None,
+        match_kind=det["match_kind"] if det else None,
+        disposicion=det["disposicion"] if det else None,
+        tipo_disposicion=det["tipo_disposicion"] if det else None,
+    )

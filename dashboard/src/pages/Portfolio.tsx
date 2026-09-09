@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { History } from "lucide-react";
 import { request, uploadFile, getToken } from "@/lib/api";
 import { ExportButtons } from "@/components/ExportButtons";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
@@ -257,6 +259,14 @@ export default function PortfolioPage() {
                           <img src={`${API_BASE}${p.etiqueta}`} alt="" className="h-8 w-8 rounded object-cover" />
                         )}
                         {p.name}
+                        <Link
+                          to={`/portfolio/${p.id}`}
+                          title="Expediente"
+                          className="ml-1 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <History size={14} /> Expediente
+                        </Link>
                       </div>
                     </TableCell>
                     <TableCell>{p.status ?? "—"}</TableCell>

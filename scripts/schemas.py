@@ -435,5 +435,42 @@ class AlertOut(BaseModel):
     tipo_disposicion: Optional[str] = None
 
 
+# ── Fase 3: expediente / línea de tiempo del trámite (portfolio) ──
+
+
+class HitoExpediente(BaseModel):
+    boletin_id: int
+    entry_id: int
+    expediente: Optional[str] = None
+    marca: Optional[str] = None
+    class_nice: Optional[int] = None
+    clase_especial: Optional[str] = None
+    titular: Optional[str] = None
+    tramitante: Optional[str] = None
+    pais: Optional[str] = None
+    fecha_inscripcion: Optional[str] = None
+    estatus: Optional[str] = None
+    tipo_disposicion: Optional[str] = None
+    disposicion: Optional[str] = None
+    page: Optional[int] = None
+    productos_servicios: Optional[str] = None
+    fuente_parsing: Optional[str] = None
+    source: Optional[str] = None
+    boletin_number: Optional[int] = None
+    boletin_period: Optional[str] = None
+    fecha_publicacion: Optional[str] = None
+    boletin_filename: Optional[str] = None
+
+
+class ExpedienteOut(BaseModel):
+    portfolio_id: int
+    user_id: Optional[int]
+    estado: str
+    hitos: list[HitoExpediente]
+    expedientes: list[str] = []
+    marcadas: list[str] = []
+    alerts: list[AlertOut] = []
+
+
 class AlertResolveIn(BaseModel):
     estado: Literal["cumplida", "descartada"]

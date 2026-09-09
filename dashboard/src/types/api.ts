@@ -200,6 +200,54 @@ export interface LapseConfig {
   default_dias_habiles: number;
 }
 
+export type EstadoExpediente =
+  | "SIN_MOVIMIENTO"
+  | "SOLICITADA"
+  | "PUBLICADA"
+  | "CONCEDIDA"
+  | "NEGADA"
+  | "DEVUELTA_FORMA"
+  | "DEVUELTA_FONDO"
+  | "CADUCA"
+  | "REVOCADA"
+  | "DESISTIDA"
+  | "RENOVADA"
+  | "INADMISIBLE";
+
+export interface ExpedienteHito {
+  boletin_id: number;
+  entry_id: number;
+  expediente: string | null;
+  marca: string | null;
+  class_nice: number | null;
+  clase_especial: string | null;
+  titular: string | null;
+  tramitante: string | null;
+  pais: string | null;
+  fecha_inscripcion: string | null;
+  estatus: string | null;
+  tipo_disposicion: string | null;
+  disposicion: string | null;
+  page: number | null;
+  productos_servicios: string | null;
+  fuente_parsing: string | null;
+  source: string | null;
+  boletin_number: number | null;
+  boletin_period: string | null;
+  fecha_publicacion: string | null;
+  boletin_filename: string | null;
+}
+
+export interface Expediente {
+  portfolio_id: number;
+  user_id: number | null;
+  estado: EstadoExpediente;
+  hitos: ExpedienteHito[];
+  expedientes: string[];
+  marcadas: string[];
+  alerts: Alert[];
+}
+
 export interface BoletinProgress {
   boletin_id: number;
   status: BoletinStatus;

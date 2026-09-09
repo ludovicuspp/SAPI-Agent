@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS boletin_entries (
 CREATE INDEX IF NOT EXISTS idx_be_boletin ON boletin_entries(boletin_id);
 CREATE INDEX IF NOT EXISTS idx_be_marca ON boletin_entries(marca);
 CREATE INDEX IF NOT EXISTS idx_be_clase ON boletin_entries(class_nice);
+CREATE INDEX IF NOT EXISTS idx_be_expediente ON boletin_entries(expediente);
 
 CREATE TABLE IF NOT EXISTS detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1736,6 +1737,58 @@ def boletines_entries_list(
     return [_entry_from_row(conn, r) for r in rows]
 
 
+def expediente_hitos(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int | None = None,
+    expediente: Optional[str] = None,
+    marca_variants: Optional[list[str]] = None,
+    class_nice: Optional[int] = None,
+) -> list[dict]:
+    """Apariciones de un expediente o de una marca en boletines visibles.
+
+    ``user_id=None`` (admin) ve todos los boletines; si no, solo los que
+    ese usuario subió. Criterios excluyentes: si viene ``expediente`` se
+    busca por ese número; si no, por nombre de marca (variantes NOCASE)
+    con filtro opcional de clase Niza.
+    """
+    cols = [
+        "e.boletin_id", "e.expediente", "e.marca", "e.class_nice",
+        "e.clase_especial", "e.titular", "e.tramitante", "e.pais",
+        "e.fecha_inscripcion", "e.estatus", "e.page", "e.disposicion",
+        "e.tipo_disposicion", "e.productos_servicios", "e.fuente_parsing",
+        "e.source", "e.id AS entry_id",
+        "b.bulletin_number AS boletin_number", "b.period AS boletin_period",
+        "b.fecha_publicacion", "b.filename AS boletin_filename",
+    ]
+    where: list[str] = []
+    params: list = []
+    if user_id is not None:
+        where.append("b.uploaded_by = ?")
+        params.append(user_id)
+    if expediente:
+        where.append("e.expediente COLLATE NOCASE = ?")
+        params.append(expediente.strip())
+    elif marca_variants:
+        placeholders = ", ".join("?" for _ in marca_variants)
+        where.append(f"e.marca COLLATE NOCASE IN ({placeholders})")
+        params.extend(marca_variants)
+        if class_nice is not None:
+            where.append("e.class_nice = ?")
+            params.append(class_nice)
+    if not where:
+        return []
+    sql = (
+        "SELECT " + ", ".join(cols)
+        + " FROM boletin_entries e JOIN boletines b ON b.id = e.boletin_id"
+        + " WHERE " + " AND ".join(where)
+        + " ORDER BY b.fecha_publicacion IS NULL, b.fecha_publicacion,"
+        " b.id, e.page, e.id"
+    )
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
 def boletines_list_extracted_for_user(
     conn: sqlite3.Connection, user_id: int
 ) -> list[BoletinRow]:
@@ -2074,17 +2127,24 @@ def alerts_list_for_user(
     *,
     estado: Optional[str] = None,
     boletin_id: Optional[int] = None,
+    portfolio_id: Optional[int] = None,
     limit: int = 200,
 ) -> list[AlertRow]:
-    sql = "SELECT * FROM alerts WHERE user_id = ?"
+    sql = "SELECT a.* FROM alerts a WHERE a.user_id = ?"
     params: list = [user_id]
     if estado:
-        sql += " AND estado = ?"
+        sql += " AND a.estado = ?"
         params.append(estado)
     if boletin_id:
-        sql += " AND boletin_id = ?"
+        sql += " AND a.boletin_id = ?"
         params.append(boletin_id)
-    sql += " ORDER BY fecha_limite ASC, id ASC LIMIT ?"
+    if portfolio_id:
+        sql += (
+            " AND a.detection_id IN ("
+            " SELECT id FROM detections WHERE portfolio_id = ?)"
+        )
+        params.append(portfolio_id)
+    sql += " ORDER BY a.fecha_limite ASC, a.id ASC LIMIT ?"
     params.append(limit)
     rows = conn.execute(sql, params).fetchall()
     return [_alert_from_row(r) for r in rows]

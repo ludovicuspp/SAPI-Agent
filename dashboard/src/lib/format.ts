@@ -154,3 +154,41 @@ export function alertCountdown(diasRestantes: number | null): string {
   if (diasRestantes === 0) return "vence hoy";
   return `${diasRestantes}d`;
 }
+
+/** Etiqueta legible del estado del trámite de una marca (expediente). */
+export function estadoExpedienteLabel(estado: string): string {
+  const map: Record<string, string> = {
+    SIN_MOVIMIENTO: "Sin movimiento",
+    SOLICITADA: "Solicitada",
+    PUBLICADA: "Publicada",
+    CONCEDIDA: "Concedida",
+    NEGADA: "Negada",
+    DEVUELTA_FORMA: "Devuelta (forma)",
+    DEVUELTA_FONDO: "Devuelta (fondo)",
+    CADUCA: "Caducada",
+    REVOCADA: "Revocada",
+    DESISTIDA: "Desistida",
+    RENOVADA: "Renovada",
+    INADMISIBLE: "Inadmisible",
+  };
+  return map[estado] ?? estado;
+}
+
+/** Color del badge del estado del trámite de una marca. */
+export function estadoExpedienteColor(estado: string): string {
+  const map: Record<string, string> = {
+    SIN_MOVIMIENTO: "bg-gray-100 text-gray-700",
+    SOLICITADA: "bg-blue-100 text-blue-700",
+    PUBLICADA: "bg-purple-100 text-purple-700",
+    CONCEDIDA: "bg-emerald-100 text-emerald-700",
+    NEGADA: "bg-red-100 text-red-700",
+    DEVUELTA_FORMA: "bg-yellow-100 text-yellow-700",
+    DEVUELTA_FONDO: "bg-orange-100 text-orange-700",
+    CADUCA: "bg-gray-100 text-gray-700",
+    REVOCADA: "bg-gray-100 text-gray-700",
+    DESISTIDA: "bg-gray-100 text-gray-700",
+    RENOVADA: "bg-cyan-100 text-cyan-700",
+    INADMISIBLE: "bg-gray-100 text-gray-700",
+  };
+  return map[estado] ?? "bg-gray-100 text-gray-700";
+}
