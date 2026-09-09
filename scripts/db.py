@@ -315,6 +315,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
     _migrate_users_role_check(conn)
     _migrate_detections_match_kind_conflict(conn)
     _backfill_detections_matched_with(conn)
+    _backfill_boletines_tomo(conn)
     # Índices por identidad (registro / solicitud) tras garantizar columnas.
     # Se hace aquí para que funcione en BD viejas que aún no tengan la
     # tabla portfolio (init_db corre migraciones ANTES del SCHEMA_SQL).
@@ -347,6 +348,34 @@ def _backfill_detections_matched_with(conn: sqlite3.Connection) -> None:
               AND (watchlist_id IS NOT NULL OR portfolio_id IS NOT NULL)
             """
         )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+def _backfill_boletines_tomo(conn: sqlite3.Connection) -> None:
+    """Rellena ``boletines.tomo`` para boletines procesados antes de que
+    la columna existiera: el valor ya estaba en ``extraction_json``
+    (``metadata.tomo``).
+
+    Idempotente: solo actualiza filas con ``tomo IS NULL``.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT id, extraction_json FROM boletines"
+            " WHERE tomo IS NULL AND extraction_json IS NOT NULL"
+        ).fetchall()
+        for boletin_id, raw in rows:
+            try:
+                payload = json.loads(raw)
+                tomo = (payload.get("metadata") or {}).get("tomo")
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if tomo:
+                conn.execute(
+                    "UPDATE boletines SET tomo = ? WHERE id = ?",
+                    (tomo, boletin_id),
+                )
         conn.commit()
     except sqlite3.OperationalError:
         pass

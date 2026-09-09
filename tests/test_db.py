@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from scripts import db
+from scripts import auth, db
 
 
 class TestSchema:
@@ -479,7 +479,6 @@ class TestDetections:
 
     def test_migrate_backfill_matched_with(self, tmp_path):
         """La migración rellena matched_with desde watchlist/portfolio."""
-        from scripts import db
         db_file = tmp_path / "mig.db"
         db.init_db(db_file)
         conn = db.connect(db_file)
@@ -558,3 +557,28 @@ class TestStats:
         assert s.portfolio_count == 1
         assert s.boletines_count == 0
         assert s.detections_count == 0
+
+
+def test_backfill_boletines_tomo_desde_extraction_json(tmp_db):
+    """Boletines anteriores a la columna tomo la recuperan del
+    extraction_json (metadata.tomo); idempotente."""
+    import json
+
+    uid = db.users_create(tmp_db, "u@example.com", auth.hash_password("pass123456"))
+    bid = db.boletines_create(tmp_db, uid, "b.pdf", "/tmp/b.pdf", "sha-tomo")
+    tmp_db.execute(
+        "UPDATE boletines SET status='extracted', extraction_json=? WHERE id=?",
+        (json.dumps({"metadata": {"tomo": "IX", "bulletin_number": 651}}), bid),
+    )
+    # Fila sin tomo en el payload → debe quedar NULL.
+    bid2 = db.boletines_create(tmp_db, uid, "c.pdf", "/tmp/c.pdf", "sha-tomo-2")
+    tmp_db.execute(
+        "UPDATE boletines SET status='extracted', extraction_json=? WHERE id=?",
+        (json.dumps({"metadata": {}}), bid2),
+    )
+    tmp_db.commit()
+
+    db._migrate_add_columns(tmp_db)
+
+    assert db.boletines_get(tmp_db, bid).tomo == "IX"
+    assert db.boletines_get(tmp_db, bid2).tomo is None
