@@ -14,6 +14,8 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 MatchKind = Literal["similar", "own_status", "conflict"]
 Source = Literal["pdfplumber_text", "hermes_llm", "hermes_vision"]
 Confidence = Literal["high", "medium", "low"]
+# Fase 4: veredicto de Hermes sobre candidatos a revisión.
+HermesVerdict = Literal["confirmed", "discarded"]
 # agent se mantiene como rol legacy (BD existente); usuarios nuevos usan
 # admin | propietario | empresa.
 Role = Literal["admin", "propietario", "empresa", "agent"]
@@ -278,6 +280,45 @@ class DetectionOut(BaseModel):
     needs_hermes_reverify: bool = False
     disposicion: Optional[str] = None
     tipo_disposicion: Optional[DisposicionTipoLiteral] = None
+    hermes_verdict: Optional[HermesVerdict] = None
+    hermes_reason: Optional[str] = None
+    hermes_verified_at: Optional[datetime] = None
+
+
+class DetectionVerdictIn(BaseModel):
+    """Veredicto de Hermes sobre una detección de la cola de verificación.
+
+    Hermes solo confirma o descarta la decisión del matcher (binario) con
+    un motivo; NO recalcula similitud (los scores viven en Python).
+    """
+
+    verdict: HermesVerdict
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class VerifyQueueItemOut(BaseModel):
+    """Candidato a verificación Hermes, con contexto del boletín."""
+
+    id: int
+    boletin_id: int
+    user_id: int
+    boletin_number: Optional[str]
+    boletin_period: Optional[str]
+    boletin_filename: Optional[str]
+    watchlist_id: Optional[int]
+    portfolio_id: Optional[int]
+    expediente: Optional[str]
+    mark_name: str
+    matched_with: Optional[str] = None
+    titular: Optional[str] = None
+    class_nice: Optional[int] = None
+    page: Optional[int] = None
+    similarity: float
+    match_kind: MatchKind
+    confidence: Confidence
+    risk_score: Optional[float] = None
+    raw_excerpt: Optional[str] = None
+    detected_at: datetime
 
 
 # ── /api/structured (Hermes → API) ────────────────────────────

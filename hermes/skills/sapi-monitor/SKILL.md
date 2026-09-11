@@ -174,6 +174,41 @@ python hermes/skills/sapi-monitor/scripts/done.py --boletin-id <ID> [--entries-a
   ``submit.py`` ya marca ``hermes_processed_at``; ``done.py`` cubre el
   caso sin entries y sirve también de red de seguridad.
 
+### 5. Verificación de conflictos (Fase 4)
+
+El matcher Python auto-marca como candidatos las detecciones borderline:
+marcas muy cortas (≤3 caracteres), confianza `medium`/`low`, o match por
+familia de marca — las fuentes típicas de falsos positivos. TÚ las
+confirmas o descartas en tu respuesta contra la decisión del motor. **No
+calculas scores**: solo decides binario (`confirmed`/`discarded`) con un
+motivo.
+
+1. Lista la cola (solo lectura de SQLite):
+
+   ```bash
+   python hermes/skills/sapi-monitor/scripts/verify_queue.py [--db data/sapi.db] [--json]
+   ```
+
+2. Para cada candidato revisa el contexto (marca, `matched_with`, clase,
+   similitud, excerpt, boletín). Si hace falta, abre la página con
+   `extract_page.py` para ver el texto/imagen real.
+3. Entrega el veredicto con `verify_submit.py`:
+
+   ```bash
+   python hermes/skills/sapi-monitor/scripts/verify_submit.py \
+     --detection-id <ID> --verdict discarded \
+     --reason "Marca 'X' de 1 carácter, no relacionada con '3XM'"
+   ```
+
+   - `confirmed`: el conflicto es real; se mantiene visible y sus alertas
+     siguen activas.
+   - `discarded`: falso positivo; la detección se oculta del listado
+     accionable y sus alertas pendientes pasan a `descartada` (queda en BD
+     para auditoría; un admin puede deshacer el veredicto).
+
+El watchdog (`watchdog.sh`) ya incluye la cola de verificación (`V#...`),
+así que el cron disparam solo cuando cambia también esa lista.
+
 ## Monitoreo periódico con cron (patrón watchdog)
 
 Para que Hermes corra solo cuando hay trabajo nuevo, usa el cron con

@@ -66,3 +66,12 @@ else:
     for b in data:
         print("#%s %s imgs=%s" % (b["boletin_id"], b["filename"], b["pages_with_images"]))
 '
+
+# Fase 4 — candidatos a verificación de conflictos (misma lógica estable).
+python3 hermes/skills/sapi-monitor/scripts/verify_queue.py --db "$DB" --json \
+  | python3 -c '
+import sys, json
+data = json.load(sys.stdin)
+for q in data:
+    print("V#%s %s match=%s clase=%s" % (q["id"], q["mark_name"], q["matched_with"], q["class_nice"]))
+'

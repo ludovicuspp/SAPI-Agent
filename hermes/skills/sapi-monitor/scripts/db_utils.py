@@ -87,6 +87,63 @@ def list_pending_hermes(db_path: str | Path, limit: int = 50) -> list[HermesPend
     return result
 
 
+@dataclass
+class VerifyQueueItem:
+    """Candidato a verificación de conflicto (Fase 4)."""
+
+    id: int
+    boletin_id: int
+    user_id: int
+    boletin_number: str | None
+    boletin_filename: str | None
+    boletin_period: str | None
+    watchlist_id: int | None
+    portfolio_id: int | None
+    expediente: str | None
+    mark_name: str
+    matched_with: str | None
+    titular: str | None
+    class_nice: int | None
+    page: int | None
+    similarity: float
+    match_kind: str
+    confidence: str
+    risk_score: float | None
+    raw_excerpt: str | None
+    detected_at: str
+
+
+def list_verify_queue(db_path: str | Path, limit: int = 50) -> list[VerifyQueueItem]:
+    """Lista detecciones pendientes de verificación Hermes (solo lectura).
+
+    Mismo contrato que ``GET /api/detections/verify-queue``: detecciones
+    con ``needs_hermes_reverify=1`` y sin veredicto, con contexto del
+    boletín. Si la BD aún no tiene las columnas de Fase 4, devuelve ``[]``
+    (el endpoint de veredicto la migra al arrancar el servicio).
+    """
+    with connect_readonly(db_path) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT d.id, d.boletin_id, d.user_id,"
+                " d.watchlist_id, d.portfolio_id, d.expediente,"
+                " d.mark_name, d.matched_with, d.titular, d.class_nice,"
+                " d.page, d.similarity, d.match_kind, d.confidence,"
+                " d.risk_score, d.raw_excerpt, d.detected_at,"
+                " b.bulletin_number AS boletin_number,"
+                " b.period AS boletin_period,"
+                " b.filename AS boletin_filename"
+                " FROM detections d"
+                " JOIN boletines b ON b.id = d.boletin_id"
+                " WHERE d.needs_hermes_reverify = 1"
+                "   AND d.hermes_verdict IS NULL"
+                " ORDER BY d.detected_at ASC, d.id ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [VerifyQueueItem(**dict(r)) for r in rows]
+
+
 def get_page_texts(db_path: str | Path, boletin_id: int) -> list[dict[str, Any]]:
     """Devuelve la lista de páginas del ``extraction_json`` de un boletín."""
     with connect_readonly(db_path) as conn:

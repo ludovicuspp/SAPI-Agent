@@ -194,8 +194,13 @@ CREATE TABLE IF NOT EXISTS detections (
     es_figura INTEGER NOT NULL DEFAULT 0,
     es_lema INTEGER NOT NULL DEFAULT 0,
     disposicion TEXT,
-    tipo_disposicion TEXT
+    tipo_disposicion TEXT,
+    hermes_verdict TEXT,
+    hermes_reason TEXT,
+    hermes_verified_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_detections_verify
+    ON detections(needs_hermes_reverify, hermes_verdict);
 CREATE INDEX IF NOT EXISTS idx_detections_user ON detections(user_id);
 CREATE INDEX IF NOT EXISTS idx_detections_boletin ON detections(boletin_id);
 CREATE INDEX IF NOT EXISTS idx_detections_watchlist ON detections(watchlist_id);
@@ -336,6 +341,10 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("boletin_entries", "tipo_disposicion", "TEXT"),
         ("detections", "disposicion", "TEXT"),
         ("detections", "tipo_disposicion", "TEXT"),
+        # Fase 4: veredicto de Hermes sobre falsos positivos borderline.
+        ("detections", "hermes_verdict", "TEXT"),
+        ("detections", "hermes_reason", "TEXT"),
+        ("detections", "hermes_verified_at", "TEXT"),
         # Gemelo digital: fecha del boletín ("Caracas, DD de MES de YYYY").
         # Es la fecha base de los lapsos legales (fase 2).
         ("boletines", "fecha_publicacion", "TEXT"),
@@ -700,6 +709,8 @@ def _migrate_detections_match_kind_conflict(conn: sqlite3.Connection) -> None:
         "ON detections(boletin_id, expediente, watchlist_id)",
         "CREATE INDEX IF NOT EXISTS idx_detections_boletin_exp "
         "ON detections(boletin_id, expediente)",
+        "CREATE INDEX IF NOT EXISTS idx_detections_verify "
+        "ON detections(needs_hermes_reverify, hermes_verdict)",
     ]
     new_create = (
         "CREATE TABLE detections (\n"
@@ -731,7 +742,12 @@ def _migrate_detections_match_kind_conflict(conn: sqlite3.Connection) -> None:
         "    fecha_inscripcion TEXT,\n"
         "    fuente_parsing TEXT,\n"
         "    es_figura INTEGER NOT NULL DEFAULT 0,\n"
-        "    es_lema INTEGER NOT NULL DEFAULT 0\n"
+        "    es_lema INTEGER NOT NULL DEFAULT 0,\n"
+        "    disposicion TEXT,\n"
+        "    tipo_disposicion TEXT,\n"
+        "    hermes_verdict TEXT,\n"
+        "    hermes_reason TEXT,\n"
+        "    hermes_verified_at TEXT\n"
         ");"
     )
 
@@ -1840,6 +1856,9 @@ class DetectionRow:
     risk_score: Optional[float] = None
     disposicion: Optional[str] = None
     tipo_disposicion: Optional[str] = None
+    hermes_verdict: Optional[str] = None
+    hermes_reason: Optional[str] = None
+    hermes_verified_at: Optional[str] = None
 
 
 def _detection_from_row(row: sqlite3.Row) -> DetectionRow:
@@ -1874,6 +1893,7 @@ def detections_add(
     risk_score: Optional[float] = None,
     disposicion: Optional[str] = None,
     tipo_disposicion: Optional[str] = None,
+    needs_hermes_reverify: int = 0,
 ) -> int:
     cur = conn.execute(
         "INSERT OR IGNORE INTO detections("
@@ -1881,8 +1901,8 @@ def detections_add(
         " expediente, mark_name, titular, class_nice, page,"
         " similarity, match_kind, source, confidence, raw_excerpt,"
         " matched_with, pais, fecha_inscripcion, fuente_parsing, es_figura, es_lema,"
-        " risk_score, disposicion, tipo_disposicion)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " risk_score, disposicion, tipo_disposicion, needs_hermes_reverify)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             boletin_id,
             user_id,
@@ -1907,6 +1927,7 @@ def detections_add(
             risk_score,
             disposicion,
             tipo_disposicion,
+            needs_hermes_reverify,
         ),
     )
     return cur.lastrowid
@@ -1917,19 +1938,23 @@ def detections_list_for_user(
     user_id: int,
     limit: int = 100,
     boletin_id: Optional[int] = None,
+    *,
+    include_discarded: bool = False,
 ) -> list[DetectionRow]:
+    filters = ["user_id = ?"]
+    params: list = [user_id]
     if boletin_id is not None:
-        rows = conn.execute(
-            "SELECT * FROM detections WHERE user_id = ? AND boletin_id = ?"
-            " ORDER BY similarity DESC, id DESC LIMIT ?",
-            (user_id, boletin_id, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM detections WHERE user_id = ?"
-            " ORDER BY id DESC LIMIT ?",
-            (user_id, limit),
-        ).fetchall()
+        filters.append("boletin_id = ?")
+        params.append(boletin_id)
+    if not include_discarded:
+        filters.append("(hermes_verdict IS NULL OR hermes_verdict != 'discarded')")
+    order = "similarity DESC, id DESC" if boletin_id is not None else "id DESC"
+    rows = conn.execute(
+        "SELECT * FROM detections WHERE "
+        + " AND ".join(filters)
+        + f" ORDER BY {order} LIMIT ?",
+        (*params, limit),
+    ).fetchall()
     return [_detection_from_row(r) for r in rows]
 
 
@@ -1957,6 +1982,7 @@ def detections_for_portfolio(
         " FROM detections d"
         " JOIN boletines b ON b.id = d.boletin_id"
         " WHERE d.portfolio_id = ? AND d.user_id = ?"
+        " AND (d.hermes_verdict IS NULL OR d.hermes_verdict != 'discarded')"
         " ORDER BY b.fecha_publicacion IS NULL, b.fecha_publicacion DESC,"
         " b.id DESC, d.id DESC",
         (portfolio_id, user_id),
@@ -1969,6 +1995,7 @@ def detections_pending_notification(
 ) -> list[DetectionRow]:
     rows = conn.execute(
         "SELECT * FROM detections WHERE user_id = ? AND notified_email = 0"
+        " AND (hermes_verdict IS NULL OR hermes_verdict != 'discarded')"
         " ORDER BY id ASC LIMIT ?",
         (user_id, limit),
     ).fetchall()
@@ -2096,6 +2123,89 @@ class AlertRow:
 
 def _alert_from_row(row: sqlite3.Row) -> AlertRow:
     return AlertRow(**dict(row))
+
+
+def detections_verify_queue(
+    conn: sqlite3.Connection, limit: int = 50
+) -> list[dict]:
+    """Candidatos pendientes de verificación Hermes (todos los tenants).
+
+    Solo detecciones marcadas para reverificar y sin veredicto aún.
+    Cada fila incluye contexto del boletín para que el LLM decida
+    confirmar o descartar el conflicto.
+    """
+    rows = conn.execute(
+        "SELECT d.*, b.bulletin_number AS boletin_number,"
+        " b.period AS boletin_period, b.filename AS boletin_filename"
+        " FROM detections d"
+        " JOIN boletines b ON b.id = d.boletin_id"
+        " WHERE d.needs_hermes_reverify = 1 AND d.hermes_verdict IS NULL"
+        " ORDER BY d.detected_at ASC, d.id ASC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def detections_verify_set(
+    conn: sqlite3.Connection,
+    detection_id: int,
+    verdict: str,
+    reason: str,
+) -> Optional[DetectionRow]:
+    """Graba el veredicto de Hermes sobre una detección.
+
+    ``verdict`` ∈ {``confirmed``, ``discarded``}. Conserva
+    ``needs_hermes_reverify=1`` como huella de que fue revisada; la cola
+    la excluye por ``hermes_verdict IS NOT NULL``.
+    """
+    cur = conn.execute(
+        "UPDATE detections SET hermes_verdict = ?, hermes_reason = ?,"
+        " hermes_verified_at = datetime('now') WHERE id = ?",
+        (verdict, reason, detection_id),
+    )
+    if cur.rowcount == 0:
+        return None
+    if verdict == "discarded":
+        conn.execute(
+            "UPDATE alerts SET estado = 'descartada',"
+            " resolved_at = datetime('now')"
+            " WHERE detection_id = ? AND estado IN ('pendiente', 'vencida')",
+            (detection_id,),
+        )
+    row = conn.execute(
+        "SELECT * FROM detections WHERE id = ?", (detection_id,)
+    ).fetchone()
+    return _detection_from_row(row) if row else None
+
+
+def detections_verify_clear(
+    conn: sqlite3.Connection, detection_id: int
+) -> Optional[DetectionRow]:
+    """Deshace el veredicto (admin): la detección vuelve a la cola.
+
+    Restaura las alertas descartadas por el flujo de verificación a
+    ``pendiente`` para que el lapso siga contando.
+    """
+    was = conn.execute(
+        "SELECT hermes_verdict FROM detections WHERE id = ?", (detection_id,)
+    ).fetchone()
+    if was is None:
+        return None
+    if was["hermes_verdict"] == "discarded":
+        conn.execute(
+            "UPDATE alerts SET estado = 'pendiente', resolved_at = NULL"
+            " WHERE detection_id = ? AND estado = 'descartada'",
+            (detection_id,),
+        )
+    conn.execute(
+        "UPDATE detections SET hermes_verdict = NULL, hermes_reason = NULL,"
+        " hermes_verified_at = NULL, needs_hermes_reverify = 1 WHERE id = ?",
+        (detection_id,),
+    )
+    row = conn.execute(
+        "SELECT * FROM detections WHERE id = ?", (detection_id,)
+    ).fetchone()
+    return _detection_from_row(row) if row else None
 
 
 def alerts_upsert(

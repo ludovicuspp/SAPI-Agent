@@ -111,6 +111,20 @@ export function disposicionColor(tipo: string | null | undefined): string {
   return map[tipo ?? ""] ?? "bg-gray-100 text-gray-700";
 }
 
+/** Etiqueta legible del estado de verificación Hermes (Fase 4). */
+export function verifyLabel(v: string | null | undefined): string {
+  if (v === "confirmed") return "Confirmada";
+  if (v === "discarded") return "Descartada";
+  return "Por verificar";
+}
+
+/** Color del resultado de verificación Hermes. */
+export function verifyColor(v: string | null | undefined): string {
+  if (v === "confirmed") return "bg-green-100 text-green-700";
+  if (v === "discarded") return "bg-gray-100 text-gray-500 line-through";
+  return "bg-yellow-100 text-yellow-700";
+}
+
 /** Etiqueta legible de un lapso legal. */
 export function lapseKeyLabel(key: string): string {
   const map: Record<string, string> = {

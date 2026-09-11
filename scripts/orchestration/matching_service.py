@@ -27,6 +27,7 @@ from scripts.matcher.distinguish import products_intersect
 from scripts.matcher.exact import exact_score
 from scripts.matcher.family import core_tokens, family_score
 from scripts.matcher.fuzzy import fuzzy_score
+from scripts.matcher.hermes_policy import should_hermes_verify
 from scripts.matcher.nice_classes import proximity
 from scripts.matcher.phonetic import phonetic_score
 from scripts.matcher.risk import risk_score
@@ -151,6 +152,14 @@ def _match_watchlist_titular(
             ),
             es_figura=1 if entry.es_figura else 0,
             es_lema=1 if entry.es_lema else 0,
+            needs_hermes_reverify=1
+            if should_hermes_verify(
+                source=source,
+                match_kind="conflict",
+                confidence="high",
+                mark_name=entry_marca,
+            )
+            else 0,
         )
         created += 1
     return created
@@ -291,6 +300,15 @@ def _match_watchlist_marca(
             ),
             es_figura=1 if entry.es_figura else 0,
             es_lema=1 if entry.es_lema else 0,
+            needs_hermes_reverify=1
+            if should_hermes_verify(
+                source=source,
+                match_kind="conflict" if is_family else "similar",
+                confidence="high" if name_sim >= 0.95 else "medium",
+                mark_name=entry.marca,
+                is_family=is_family,
+            )
+            else 0,
         )
         created += 1
     return created

@@ -13,6 +13,7 @@ from scripts.schemas import (
     BoletinOut,
     DetectionOut,
     PortfolioHistoryOut,
+    VerifyQueueItemOut,
     PortfolioOut,
     UserOut,
     WatchlistOut,
@@ -181,6 +182,9 @@ def detection_to_out(r: db.DetectionRow) -> DetectionOut:
         needs_hermes_reverify=bool(getattr(r, "needs_hermes_reverify", 0)),
         disposicion=getattr(r, "disposicion", None),
         tipo_disposicion=getattr(r, "tipo_disposicion", None),
+        hermes_verdict=getattr(r, "hermes_verdict", None),
+        hermes_reason=getattr(r, "hermes_reason", None),
+        hermes_verified_at=getattr(r, "hermes_verified_at", None),
     )
 
 
@@ -226,4 +230,35 @@ def alert_to_out(conn: sqlite3.Connection, r: db.AlertRow) -> AlertOut:
         match_kind=det["match_kind"] if det else None,
         disposicion=det["disposicion"] if det else None,
         tipo_disposicion=det["tipo_disposicion"] if det else None,
+    )
+def verify_queue_item_out(d: dict) -> VerifyQueueItemOut:
+    """Convierte una fila de ``db.detections_verify_queue`` a schema.
+
+    ``bulletin_number`` y ``period`` viven como INTEGER/TEXT en SQLite;
+    se normalizan a ``str|None`` para no romper la validación estricta.
+    """
+    def _s(v) -> Optional[str]:
+        return str(v) if v is not None else None
+
+    return VerifyQueueItemOut(
+        id=d["id"],
+        boletin_id=d["boletin_id"],
+        user_id=d["user_id"],
+        boletin_number=_s(d.get("boletin_number")),
+        boletin_period=_s(d.get("boletin_period")),
+        boletin_filename=_s(d.get("boletin_filename")),
+        watchlist_id=d["watchlist_id"],
+        portfolio_id=d["portfolio_id"],
+        expediente=d["expediente"],
+        mark_name=d["mark_name"],
+        matched_with=d.get("matched_with"),
+        titular=d["titular"],
+        class_nice=d["class_nice"],
+        page=d["page"],
+        similarity=d["similarity"],
+        match_kind=d["match_kind"],
+        confidence=d["confidence"],
+        risk_score=d.get("risk_score"),
+        raw_excerpt=d["raw_excerpt"],
+        detected_at=d["detected_at"],
     )

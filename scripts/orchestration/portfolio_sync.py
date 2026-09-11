@@ -27,6 +27,7 @@ from scripts.matcher.distinguish import products_intersect
 from scripts.matcher.exact import exact_score
 from scripts.matcher.family import family_score
 from scripts.matcher.fuzzy import fuzzy_score
+from scripts.matcher.hermes_policy import should_hermes_verify
 from scripts.matcher.nice_classes import classes_related, proximity
 from scripts.matcher.phonetic import phonetic_score
 from scripts.matcher.risk import risk_score
@@ -351,6 +352,15 @@ def match_portfolio_conflicts(
                 fuente_parsing="hermes" if source != "pdfplumber_text" else "pdfplumber",
                 es_figura=1 if getattr(entry, "es_figura", False) else 0,
                 es_lema=1 if getattr(entry, "es_lema", False) else 0,
+                needs_hermes_reverify=1
+                if should_hermes_verify(
+                    source=source,
+                    match_kind="conflict",
+                    confidence=confidence,
+                    mark_name=entry_marca,
+                    is_family=bool(fam >= 1.0),
+                )
+                else 0,
             )
             existing_families.add(pname)
             created += 1

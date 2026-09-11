@@ -145,6 +145,9 @@ export interface Detection {
   es_lema: boolean;
   disposicion?: string | null;
   tipo_disposicion?: string | null;
+  hermes_verdict?: "confirmed" | "discarded" | null;
+  hermes_reason?: string | null;
+  hermes_verified_at?: string | null;
 }
 
 export interface Summary {

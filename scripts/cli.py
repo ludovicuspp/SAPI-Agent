@@ -424,6 +424,38 @@ def cmd_list_detections(args):
         conn.close()
 
 
+def cmd_verify_scan(args):
+    """Backfill: marca como candidatos a verificación Hermes las
+    detecciones existentes que cumplen la política (marcas cortas,
+    confianza media/baja, familia). Se publican en ``needs_hermes_reverify=1``
+    para que la cola ``verify-queue`` las recoja."""
+    from scripts.matcher.hermes_policy import should_hermes_verify
+
+    cfg, conn = _load_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM detections"
+            " WHERE hermes_verdict IS NULL AND source = 'pdfplumber_text'"
+        ).fetchall()
+        flagged = 0
+        for r in rows:
+            if should_hermes_verify(
+                source=r["source"],
+                match_kind=r["match_kind"],
+                confidence=r["confidence"],
+                mark_name=r["mark_name"],
+            ):
+                conn.execute(
+                    "UPDATE detections SET needs_hermes_reverify = 1 WHERE id = ?",
+                    (r["id"],),
+                )
+                flagged += 1
+        conn.commit()
+        print(f"Listos: {flagged} detecciones marcadas de {len(rows)} revisadas.")
+    finally:
+        conn.close()
+
+
 def cmd_send_digest(args):
     cfg, conn = _load_conn()
     try:
@@ -599,6 +631,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="IDs de boletines a procesar (por defecto: todos con fecha).",
     )
 
+    s = sub.add_parser(
+        "verify-scan",
+        help="Backfill: marca detecciones existentes como candidatas a "
+        "verificación Hermes (Fase 4).",
+    )
+
     s = sub.add_parser("send-digest", help="Envía resumen por email.")
     s.add_argument("--user-email", required=True)
     s.add_argument("--period-label")
@@ -626,6 +664,7 @@ def main(argv: list[str] | None = None) -> int:
         "list-detections": cmd_list_detections,
         "rebuild-alerts": cmd_rebuild_alerts,
         "send-digest": cmd_send_digest,
+        "verify-scan": cmd_verify_scan,
         "stats": cmd_stats,
     }
     dispatch[args.cmd](args)

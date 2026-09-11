@@ -1,4 +1,5 @@
-"""GET /api/detections — listado con filtros, multi-tenant."""
+"""GET /api/detections — listado con filtros, multi-tenant + cola de
+verificación Hermes (Fase 4)."""
 from __future__ import annotations
 
 from typing import Optional
@@ -7,9 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 import sqlite3
 
 from scripts import db
-from api.deps import get_db, get_current_user
-from api.routers._helpers import detection_to_out
-from scripts.schemas import DetectionOut
+from api.deps import get_db, get_current_user, require_hermes
+from api.routers._helpers import detection_to_out, verify_queue_item_out
+from scripts.schemas import (
+    DetectionOut,
+    DetectionVerdictIn,
+    VerifyQueueItemOut,
+)
 
 router = APIRouter()
 
@@ -18,11 +23,81 @@ router = APIRouter()
 async def list_detections(
     limit: int = 100,
     boletin_id: Optional[int] = None,
+    include_discarded: bool = False,
     user: db.UserRow = Depends(get_current_user),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    rows = db.detections_list_for_user(conn, user.id, limit=limit, boletin_id=boletin_id)
+    rows = db.detections_list_for_user(
+        conn,
+        user.id,
+        limit=limit,
+        boletin_id=boletin_id,
+        include_discarded=include_discarded,
+    )
     return [detection_to_out(r) for r in rows]
+
+
+@router.get("/verify-queue", response_model=list[VerifyQueueItemOut])
+async def verify_queue(
+    limit: int = 50,
+    _hermes: None = Depends(require_hermes),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Cola de candidatos a verificación Hermes (todos los tenants).
+
+    Lista las detecciones auto-marcadas o reprocesadas sin veredicto,
+    con contexto del boletín (número, página, excerpt). Hermes decide
+    confirmar o descartar vía ``POST /{id}/verify``.
+    """
+    rows = db.detections_verify_queue(conn, limit=limit)
+    return [verify_queue_item_out(r) for r in rows]
+
+
+@router.post("/{detection_id}/verify", response_model=DetectionOut)
+async def verify_detection(
+    detection_id: int,
+    payload: DetectionVerdictIn,
+    _hermes: None = Depends(require_hermes),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Graba el veredicto binario de Hermes sobre una detección.
+
+    ``discarded`` si es falso positivo: la detección se oculta de los
+    listados accionables y sus alertas pendientes pasan a
+    ``descartada`` (se queda en BD para auditoría). ``confirmed`` deja
+    todo como está. Hermes no recalcula similitud.
+    """
+    det = db.detections_verify_set(
+        conn, detection_id, payload.verdict, payload.reason
+    )
+    if det is None:
+        raise HTTPException(status_code=404, detail="Detection no encontrada")
+    conn.commit()
+    return detection_to_out(det)
+
+
+@router.post("/{detection_id}/undo-verdict", response_model=DetectionOut)
+async def undo_verdict(
+    detection_id: int,
+    user: db.UserRow = Depends(get_current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Deshace el veredicto de Hermes (owner o admin).
+
+    Vuelve la detección a la cola de verificación y restaura las
+    alertas descartadas por el flujo a ``pendiente``.
+    """
+    det = conn.execute(
+        "SELECT * FROM detections WHERE id = ?", (detection_id,)
+    ).fetchone()
+    if det is None:
+        raise HTTPException(status_code=404, detail="Detection no encontrada")
+    if det["user_id"] != user.id and user.role != "admin":
+        raise HTTPException(status_code=403, detail="No autorizado")
+    det2 = db.detections_verify_clear(conn, detection_id)
+    conn.commit()
+    db.user_log_action(conn, user.id, f"undo_verdict:{detection_id}")
+    return detection_to_out(det2)
 
 
 @router.post("/{detection_id}/reverify", response_model=DetectionOut)
