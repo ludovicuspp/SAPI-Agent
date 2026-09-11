@@ -176,3 +176,27 @@ class TestMarcaEntryParser:
         with_pais = [e for e in entries if e.pais]
         # Al menos uno con país
         assert len(with_pais) >= 1
+
+    def test_tramitante_extraido(self):
+        """El cierre ``TRAMITANTE:`` del bloque se captura como tramitante,
+        sin contaminar la entrada siguiente."""
+        text = (
+            "Insc. 2026-001 del 01 DE ENERO DE 2026\n"
+            "SOLICITADA POR: EXOTIC S.A Domicilio: X País: PANAMÁ\n"
+            "EXOTIC EXPERT\n"
+            "EN CLASE: 3\n"
+            "PARA DISTINGUIR: CHAMPÚ CLASE 3\n"
+            "TRAMITANTE: LAORDEN FICHOT CONSTANTIN HENRI - ALCIDES GIMENEZ PINO\n"
+            "___________________________________________________\n"
+            "Insc. 2026-002 del 02 DE ENERO DE 2026\n"
+            "SOLICITADA POR: OTRA S.A Domicilio: X País: VENEZUELA\n"
+            "OTRA MARCA\n"
+            "EN CLASE: 25\n"
+        )
+        parser = MarcaEntryParser()
+        entries = parser.parse(text)
+        by_exp = {e.expediente: e for e in entries}
+        assert by_exp["2026-001"].tramitante == (
+            "LAORDEN FICHOT CONSTANTIN HENRI - ALCIDES GIMENEZ PINO"
+        )
+        assert by_exp["2026-002"].tramitante is None

@@ -30,6 +30,7 @@ from scripts.parsers.patterns.base import (
     INSC_RE,
     PAIS_RE,
     SOLICITADA_RE,
+    TRAMITANTE_RE,
     clean_marca,
     clean_text,
     clean_titular,
@@ -47,12 +48,14 @@ def _entry_from_block(expediente: str, fecha_raw: str, content: str) -> dict:
     clase_m = CLASE_RE.search(content)
     pais_m = PAIS_RE.search(content)
     distinguir_m = DISTINGUIR_RE.search(content)
+    tramitante_m = TRAMITANTE_RE.search(content)
 
     titular = clean_titular(titular_m.group("titular")) if titular_m else None
     pais_raw = pais_m.group("pais") if pais_m else None
     pais = normalize_pais(pais_raw)
     clase_niza, clase_especial = parse_clase(clase_m.group("clase") if clase_m else None)
     productos_servicios = clean_text(distinguir_m.group("distinguir")) if distinguir_m else None
+    tramitante = clean_text(tramitante_m.group("tramitante")) if tramitante_m else None
 
     # Marca: líneas en MAYÚSCULAS entre País (o SOLICITADA POR) y EN CLASE.
     marca_lines = []
@@ -78,6 +81,7 @@ def _entry_from_block(expediente: str, fecha_raw: str, content: str) -> dict:
         "clase_niza": clase_niza,
         "clase_especial": clase_especial,
         "titular": titular,
+        "tramitante": tramitante,
         "pais": pais,
         "fecha_inscripcion": normalize_fecha(fecha_raw),
         "es_figura": es_figura,

@@ -344,13 +344,14 @@ def cmd_extract_entries(args):
             data = json.loads(row["extraction_json"])
             pages = data.get("pages", [])
             parser_text = processor._build_parser_text(pages)
-            page_lookup, section_lookup, disposicion_lookup = (
+            page_lookup, section_lookup, disposicion_lookup, tomo_lookup = (
                 processor.make_position_lookups(parser_text)
             )
             parser = MarcaEntryParser(
                 page_lookup=page_lookup,
                 section_lookup=section_lookup,
                 disposicion_lookup=disposicion_lookup,
+                tomo_lookup=tomo_lookup,
             )
             entries, _stats = parser.parse_with_stats(parser_text)
             n = boletines_entries_replace(conn, bid, entries)
@@ -388,6 +389,43 @@ def cmd_rebuild_alerts(args):
             print(f"[{bid}] {n} alertas de lapso")
         print(f"Total: {total} alertas en {len(ids)} boletines")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def cmd_backfill_lapse_days(args):
+    """Recalcula ``boletin_entries.lapse_dias_override`` desde el texto de
+    la ``disposicion`` de cada entry. Cuando SAPI publica un plazo
+    distinto al legal en una disposicion concreta (p.ej. CADUCA con
+    "DIEZ (10) DÍAS HÁBILES"), ese valor prevalece sobre el default de
+    ``lapse_config``. Si la disposicion no menciona plazo, queda el
+    NULL y se usa el default legal (LPI/LOPA sembrado en lapse_config)."""
+    from scripts.parsers.patterns.lapse import lapse_for_entry
+
+    cfg, conn = _load_conn()
+    try:
+        total = updated = with_plazo = 0
+        for e in conn.execute(
+            "SELECT id, disposicion FROM boletin_entries"
+        ):
+            total += 1
+            d, source = lapse_for_entry(e["disposicion"], None)
+            if d is None:
+                continue
+            with_plazo += 1
+            conn.execute(
+                "UPDATE boletin_entries"
+                " SET lapse_dias_override = ?, lapse_dias_source = ?"
+                " WHERE id = ?",
+                (d, source, e["id"]),
+            )
+            updated += 1
+        conn.commit()
+        print(
+            f"Backfill lapse: {updated} entries con override,"
+            f" {with_plazo} disposi ciones con plazo explícito,"
+            f" {total} revisadas en total."
+        )
     finally:
         conn.close()
 
@@ -659,6 +697,12 @@ def build_parser() -> argparse.ArgumentParser:
         "verificación Hermes (Fase 4).",
     )
 
+    sub.add_parser(
+        "backfill-lapse-days",
+        help="Recalcula boletin_entries.lapse_dias_override desde el "
+        "texto del boletín (regex sobre disposicion y contexto).",
+    )
+
     s = sub.add_parser("send-digest", help="Envía resumen por email.")
     s.add_argument("--user-email", required=True)
     s.add_argument("--period-label")
@@ -690,6 +734,7 @@ def main(argv: list[str] | None = None) -> int:
         "extract-entries": cmd_extract_entries,
         "list-detections": cmd_list_detections,
         "rebuild-alerts": cmd_rebuild_alerts,
+        "backfill-lapse-days": cmd_backfill_lapse_days,
         "send-digest": cmd_send_digest,
         "verify-scan": cmd_verify_scan,
         "stats": cmd_stats,

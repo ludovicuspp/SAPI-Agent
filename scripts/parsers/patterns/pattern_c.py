@@ -18,6 +18,8 @@ from typing import Iterator
 from scripts.parsers.patterns.base import (
     DESCRIPCION_ETIQUETA_RE,
     INSC_RE,
+    TRAMITANTE_RE,
+    clean_text,
 )
 
 
@@ -49,12 +51,19 @@ def extract(text: str) -> Iterator[dict]:
         if NOMBRE_MARCA_RE.search(content):
             continue
 
+        tramitante_m = TRAMITANTE_RE.search(content)
+
         yield {
             "expediente": expediente.strip(),
             "marca": None,
             "clase_niza": None,
             "clase_especial": None,
             "titular": None,
+            "tramitante": (
+                clean_text(tramitante_m.group("tramitante"))
+                if tramitante_m
+                else None
+            ),
             "pais": None,
             "fecha_inscripcion": None,
             "es_figura": True,

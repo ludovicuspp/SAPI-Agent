@@ -367,13 +367,14 @@ def _entries_from_extraction_json(extraction_json: str) -> list[Any]:
     if not pages:
         return []
     parser_text = _build_parser_text(pages)
-    page_lookup, section_lookup, disposicion_lookup = make_position_lookups(
+    page_lookup, section_lookup, disposicion_lookup, tomo_lookup = make_position_lookups(
         parser_text
     )
     parser = MarcaEntryParser(
         page_lookup=page_lookup,
         section_lookup=section_lookup,
         disposicion_lookup=disposicion_lookup,
+        tomo_lookup=tomo_lookup,
     )
     entries, _stats = parser.parse_with_stats(parser_text)
     return entries

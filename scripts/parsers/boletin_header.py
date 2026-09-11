@@ -71,6 +71,11 @@ _TOMO_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Cabecera de inicio de tomo: "Tomo 02/18", "Tomo 9 / 22", etc. Solo
+# aparece en la primera página de cada tomo y es la señal más fiable para
+# dividir el PDF en rangos de páginas → tomo.
+_TOMO_START_RE = re.compile(r"[Tt]omo\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+
 
 _MONTHS_ES = {
     "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5,
@@ -108,6 +113,59 @@ def detect(text: str) -> BoletinMetadata:
         md.raw_matches["tomo"] = m.group(0)
 
     return md
+
+
+# ── Tomos por rango de páginas ───────────────────────────────
+
+
+def _arabic_to_roman(n: int) -> str:
+    """Convierte 1..3999 a numerales romanos (para el tomo)."""
+    if n < 1:
+        return str(n)
+    vals = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+        (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+    ]
+    out = []
+    for value, symbol in vals:
+        while n >= value:
+            out.append(symbol)
+            n -= value
+    return "".join(out)
+
+
+def tomo_ranges(text: str) -> list[tuple[int, int, int]]:
+    """Divide el boletín en tomos según sus cabeceras de inicio.
+
+    Busca las ocurrencias de ``Tomo N/TOTAL`` (p.ej. ``Tomo 02/18``) y
+    devuelve una lista de ``(page_inicio, tomo_arabico, total_tomos)``
+    ordenada por página. La primera página de un tomo suele ser N=1
+    (página 1) seguida del resto; se devuelve una entrada por cabecera
+    detectada (sin dedup por número repetido en el mismo rango).
+    """
+    ranges: list[tuple[int, int, int, int]] = []
+    for m in _TOMO_START_RE.finditer(text):
+        num = int(m.group(1))
+        total = int(m.group(2))
+        page = _page_of(text, m.start())
+        ranges.append((page, num, total, m.start()))
+    # Deducir las páginas de inicio de manera robusta: la posición del
+    # match ya indica dónde empieza; _page_of lo resuelve si hay página.
+    return [(p, n, t) for p, n, t, _ in ranges]
+
+
+def _page_of(text: str, position: int) -> int:
+    """Devuelve el número de página del marcador ``--- página N ---``
+    inmediatamente anterior a ``position``."""
+    page_re = re.compile(r"--- página (\d+) ---")
+    best = -1
+    best_page = 0
+    for m in page_re.finditer(text):
+        if m.start() <= position:
+            best = m.start()
+            best_page = int(m.group(1))
+    return best_page
 
 
 # ── Detección inline de sección actual ────────────────────────

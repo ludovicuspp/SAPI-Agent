@@ -499,7 +499,7 @@ class TestProcessor:
         from scripts.orchestration.processor import make_position_lookups
 
         text = sample_boletin_text
-        page_lookup, section_lookup, _disp = make_position_lookups(text)
+        page_lookup, section_lookup, _disp, tomo_lookup = make_position_lookups(text)
 
         # La 1ª entrada está en la página 8, sección PUBLICADA.
         idx = text.find("Insc. 2015-015976")
@@ -533,7 +533,7 @@ class TestProcessor:
             )
         text = "\n".join(parts)
 
-        page_lookup, section_lookup, _disp = make_position_lookups(text)
+        page_lookup, section_lookup, _disp, tomo_lookup = make_position_lookups(text)
         parser = MarcaEntryParser(
             page_lookup=page_lookup, section_lookup=section_lookup
         )
@@ -640,7 +640,7 @@ class TestNotifierMocked:
             "SOLICITADA POR: Z SA País: VENEZUELA\n"
             "MARCA PUB\nEN CLASE: 9\nPARA DISTINGUIR: VARIOS.\n"
         )
-        page_lookup, section_lookup, disp_lookup = make_position_lookups(text)
+        page_lookup, section_lookup, disp_lookup, tomo_lookup = make_position_lookups(text)
 
         idx_forma = text.find("Insc. 2026-005001")
         idx_fondo = text.find("Insc. 2026-005002")
@@ -668,3 +668,74 @@ class TestNotifierMocked:
         # Las entradas de secciones normales siguen intactas.
         assert entries["2026-005001"].estatus == "DEVUELTA"
         assert entries["2026-005003"].estatus == "PUBLICADA"
+
+
+class TestTomoPorPagina:
+    def test_tomo_lookup_por_rango_de_paginas(self, sample_boletin_text):
+        """Las cabeceras ``Tomo N/M`` dividen el boletín en rangos de páginas;
+        cada entrada recibe el tomo según la página donde aparece."""
+        from scripts.orchestration.processor import make_position_lookups
+
+        text = (
+            "Boletín de la Propiedad Industrial No. 999\n"
+            "Tomo 1/2\n"
+            "--- página 1 ---\n"
+            "MARCAS CON ORDEN DE PUBLICACIÓN\n"
+            "Insc. 2010-000001 del 1 DE ENERO DE 2010\n"
+            "SOLICITADA POR: A SA País: VENEZUELA\n"
+            "MARCA UNO\nEN CLASE: 35\nPARA DISTINGUIR: ALGO.\n"
+            "--- página 10 ---\n"
+            "Tomo 2/2\n"
+            "Insc. 2010-000002 del 1 DE ENERO DE 2010\n"
+            "SOLICITADA POR: B SA País: VENEZUELA\n"
+            "MARCA DOS\nEN CLASE: 35\nPARA DISTINGUIR: ALGO.\n"
+            "--- página 20 ---\n"
+            "Insc. 2010-000003 del 1 DE ENERO DE 2010\n"
+            "SOLICITADA POR: C SA País: VENEZUELA\n"
+            "MARCA TRES\nEN CLASE: 35\nPARA DISTINGUIR: ALGO.\n"
+        )
+        page_lookup, _s, _d, tomo_lookup = make_position_lookups(text)
+        assert page_lookup(text, text.find("MARCA UNO")) == 1
+        assert tomo_lookup(text, text.find("MARCA UNO")) == "I"
+        assert page_lookup(text, text.find("MARCA DOS")) == 10
+        assert tomo_lookup(text, text.find("MARCA DOS")) == "II"
+        assert page_lookup(text, text.find("MARCA TRES")) == 20
+        assert tomo_lookup(text, text.find("MARCA TRES")) == "II"
+
+    def test_tomo_se_persiste_en_entries(self, tmp_db):
+        """El upsert y el replace guardan el tomo por entrada."""
+        import scripts.db as db
+
+        uid = db.users_create(tmp_db, "tomo@x.y", "h")
+        bid = db.boletines_create(tmp_db, uid, "b.pdf", "/tmp/b.pdf", "sh-tomo")
+
+        class _E:
+            def __init__(self, exp, marca, page, tomo):
+                self.expediente = exp
+                self.marca = marca
+                self.tomo = tomo
+                self.page = page
+                self.clase_especial = None
+                self.titular = "T"
+                self.pais = "VE"
+                self.fecha_inscripcion = None
+                self.estatus = None
+                self.matcheable = True
+                self.es_figura = False
+                self.es_lema = False
+                self.productos_servicios = None
+                self.fuente_parsing = "pattern_a"
+                self.source = None
+                self.excerpt = "x"
+
+        db.boletines_entries_replace(
+            tmp_db, bid,
+            [_E("E1", "MARCA I", 5, "I"), _E("E2", "MARCA II", 120, "II")],
+        )
+        tmp_db.commit()
+        rows = db.boletines_entries_list(tmp_db, bid)
+        by_exp = {r.expediente: r for r in rows}
+        assert by_exp["E1"].tomo == "I"
+        assert by_exp["E2"].tomo == "II"
+        assert by_exp["E1"].page == 5
+        assert by_exp["E2"].page == 120

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { request } from "@/lib/api";
 import { watchBoletinProgress } from "@/lib/ws";
@@ -20,6 +20,26 @@ export default function BoletinDetail() {
   const [page, setPage] = useState(1);
   const [selectedEntry, setSelectedEntry] = useState<BoletinEntry | null>(null);
   const PAGE_SIZE = 50;
+
+  type EntryFilters = {
+    marca: string;
+    titular: string;
+    tramitante: string;
+    clase: string;
+    pais: string;
+    estatus: string;
+    tomo: string;
+  };
+  const EMPTY_FILTERS: EntryFilters = {
+    marca: "",
+    titular: "",
+    tramitante: "",
+    clase: "",
+    pais: "",
+    estatus: "",
+    tomo: "",
+  };
+  const [filters, setFilters] = useState<EntryFilters>(EMPTY_FILTERS);
 
   useEffect(() => {
     if (!id) return;
@@ -61,22 +81,120 @@ export default function BoletinDetail() {
       .catch(console.error);
   }, [id]);
 
-  const filteredEntries = useMemo(() => {
-    const q = entryQuery.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter((e) =>
-      [
-        e.marca,
-        e.titular,
-        e.tramitante,
-        e.expediente,
-        e.pais,
-        e.estatus,
-        e.productos_servicios,
-        e.class_nice != null ? String(e.class_nice) : "",
-      ].some((v) => v && v.toLowerCase().includes(q)),
+  // Orden de tomos en romano (I, II, …, XXV) para ordenar el select.
+  const TOMO_ORDER: Record<string, number> = (() => {
+    const m: Record<string, number> = {};
+    const romans = [
+      "I","II","III","IV","V","VI","VII","VIII","IX","X",
+      "XI","XII","XIII","XIV","XV","XVI","XVII","XVIII","XIX","XX",
+      "XXI","XXII","XXIII","XXIV","XXV",
+    ];
+    romans.forEach((r, i) => { m[r] = i + 1; });
+    return m;
+  })();
+
+  // Clave de búsqueda precomputada por entry (todos los campos en minúscula,
+  // unidos en un solo string). Optimiza el filtrado: una sola pasada de
+  // minúsculas por entry al cargar, en vez de 9 `toLowerCase()` × N entries
+  // en cada keystroke.
+  const searchKeys = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const e of entries) {
+      const cls =
+        e.clase_especial === "LC" || e.class_nice === 0
+          ? "LC"
+          : e.class_nice != null
+          ? String(e.class_nice)
+          : "";
+      m.set(
+        e.id,
+        [
+          e.marca ?? "",
+          e.expediente,
+          e.titular ?? "",
+          e.tramitante ?? "",
+          cls,
+          e.pais ?? "",
+          e.estatus ?? "",
+          e.tomo ?? "",
+          e.productos_servicios ?? "",
+        ]
+          .join(" ")
+          .toLowerCase(),
+      );
+    }
+    return m;
+  }, [entries]);
+
+  // Valores únicos por filtro, ordenados para poblar los selects.
+  const filterOptions = useMemo(() => {
+    const collect = (fn: (e: BoletinEntry) => string | null): string[] => {
+      const set = new Set<string>();
+      for (const e of entries) {
+        const v = fn(e);
+        if (v) set.add(v);
+      }
+      return Array.from(set);
+    };
+    const alpha = (a: string, b: string) =>
+      a.localeCompare(b, "es", { sensitivity: "base" });
+    const clases = collect((e) => {
+      if (e.clase_especial === "LC" || e.class_nice === 0) return "LC";
+      return e.class_nice != null ? String(e.class_nice) : null;
+    }).sort((a, b) => {
+      if (a === "LC") return 1;
+      if (b === "LC") return -1;
+      return Number(a) - Number(b);
+    });
+    const tomos = collect((e) => e.tomo ?? null).sort(
+      (a, b) => (TOMO_ORDER[a] ?? 9999) - (TOMO_ORDER[b] ?? 9999),
     );
-  }, [entries, entryQuery]);
+    return {
+      marcas: collect((e) => e.marca ?? null).sort(alpha),
+      titulares: collect((e) => e.titular ?? null).sort(alpha),
+      tramitantes: collect((e) => e.tramitante ?? null).sort(alpha),
+      clases,
+      paises: collect((e) => e.pais ?? null).sort(alpha),
+      estatus: collect((e) => e.estatus ?? null).sort(alpha),
+      tomos,
+    };
+  }, [entries]);
+
+  const deferredQuery = useDeferredValue(entryQuery);
+
+  // Búsqueda libre + filtros estructurados en una sola pasada.
+  const filteredEntries = useMemo(() => {
+    const q = deferredQuery.trim().toLowerCase();
+    return entries.filter((e) => {
+      if (q && !searchKeys.get(e.id)?.includes(q)) return false;
+      if (filters.marca && e.marca !== filters.marca) return false;
+      if (filters.titular && e.titular !== filters.titular) return false;
+      if (filters.tramitante && e.tramitante !== filters.tramitante) return false;
+      if (filters.pais && e.pais !== filters.pais) return false;
+      if (filters.estatus && e.estatus !== filters.estatus) return false;
+      if (filters.tomo && e.tomo !== filters.tomo) return false;
+      if (filters.clase) {
+        const cls =
+          e.clase_especial === "LC" || e.class_nice === 0
+            ? "LC"
+            : e.class_nice != null
+            ? String(e.class_nice)
+            : "";
+        if (cls !== filters.clase) return false;
+      }
+      return true;
+    });
+  }, [entries, searchKeys, deferredQuery, filters]);
+
+  const setFilter = <K extends keyof EntryFilters>(k: K, v: EntryFilters[K]) =>
+    setFilters((prev) => ({ ...prev, [k]: v }));
+  const clearAllFilters = () => {
+    setFilters(EMPTY_FILTERS);
+    setEntryQuery("");
+  };
+  const anyFilterActive =
+    entryQuery.trim() !== "" ||
+    Object.values(filters).some((v) => v !== "");
 
   // Paginación sobre el conjunto ya filtrado.
   const entryTotalPages = Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE));
@@ -243,12 +361,102 @@ export default function BoletinDetail() {
                 </p>
               </div>
               <Input
-                placeholder="Buscar marca, titular, expediente, país, clase…"
+                placeholder="Buscar (marca, titular, expediente, país…)"
                 value={entryQuery}
                 onChange={(e) => setEntryQuery(e.target.value)}
                 className="max-w-xs"
                 aria-label="Buscar marcas"
               />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={filters.marca}
+                onChange={(e) => setFilter("marca", e.target.value)}
+                className="h-9 max-w-[14rem] truncate rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                aria-label="Filtrar por marca"
+              >
+                <option value="">Marca: todas</option>
+                {filterOptions.marcas.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              <select
+                value={filters.titular}
+                onChange={(e) => setFilter("titular", e.target.value)}
+                className="h-9 max-w-[14rem] truncate rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                aria-label="Filtrar por titular"
+              >
+                <option value="">Titular: todos</option>
+                {filterOptions.titulares.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              <select
+                value={filters.tramitante}
+                onChange={(e) => setFilter("tramitante", e.target.value)}
+                className="h-9 max-w-[14rem] truncate rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                aria-label="Filtrar por tramitante"
+              >
+                <option value="">Tramitante: todos</option>
+                {filterOptions.tramitantes.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              <select
+                value={filters.clase}
+                onChange={(e) => setFilter("clase", e.target.value)}
+                className="h-9 max-w-[8rem] rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                aria-label="Filtrar por clase"
+              >
+                <option value="">Clase: todas</option>
+                {filterOptions.clases.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <select
+                value={filters.pais}
+                onChange={(e) => setFilter("pais", e.target.value)}
+                className="h-9 max-w-[12rem] truncate rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                aria-label="Filtrar por país"
+              >
+                <option value="">País: todos</option>
+                {filterOptions.paises.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <select
+                value={filters.estatus}
+                onChange={(e) => setFilter("estatus", e.target.value)}
+                className="h-9 max-w-[10rem] truncate rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                aria-label="Filtrar por estatus"
+              >
+                <option value="">Estatus: todos</option>
+                {filterOptions.estatus.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <select
+                value={filters.tomo}
+                onChange={(e) => setFilter("tomo", e.target.value)}
+                className="h-9 max-w-[8rem] rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                aria-label="Filtrar por tomo"
+              >
+                <option value="">Tomo: todos</option>
+                {filterOptions.tomos.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              {anyFilterActive && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearAllFilters}
+                  aria-label="Limpiar filtros"
+                >
+                  Limpiar
+                </Button>
+              )}
             </div>
 
             <div className="text-sm text-gray-600">
@@ -268,6 +476,7 @@ export default function BoletinDetail() {
                   <TableHead>Productos / Servicios</TableHead>
                   <TableHead>Estatus</TableHead>
                   <TableHead>Página</TableHead>
+                  <TableHead>Tomo</TableHead>
                   <TableHead>Tipo</TableHead>
                 </TableRow>
               </TableHeader>
@@ -291,6 +500,7 @@ export default function BoletinDetail() {
                     </TableCell>
                     <TableCell>{e.estatus ?? "—"}</TableCell>
                     <TableCell>{e.page ?? "—"}</TableCell>
+                    <TableCell>{e.tomo ?? "—"}</TableCell>
                     <TableCell>
                       {e.is_lema && <Badge variant="secondary">Lema</Badge>}
                       {e.is_figura && <Badge variant="outline">Figura</Badge>}
@@ -307,7 +517,7 @@ export default function BoletinDetail() {
                 ))}
                 {filteredEntries.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={10} className="text-center text-gray-500">
+                    <TableCell colSpan={11} className="text-center text-gray-500">
                       No hay marcas que coincidan
                     </TableCell>
                   </TableRow>
@@ -362,6 +572,7 @@ export default function BoletinDetail() {
               <dt className="text-gray-500">País:</dt><dd>{selectedEntry.pais ?? "—"}</dd>
               <dt className="text-gray-500">Estatus:</dt><dd>{selectedEntry.estatus ?? "—"}</dd>
               <dt className="text-gray-500">Página:</dt><dd>{selectedEntry.page ?? "—"}</dd>
+              <dt className="text-gray-500">Tomo:</dt><dd>{selectedEntry.tomo ?? "—"}</dd>
               {(selectedEntry.is_lema || selectedEntry.is_figura) && (
                 <>
                   <dt className="text-gray-500">Tipo:</dt>

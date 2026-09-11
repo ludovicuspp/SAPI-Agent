@@ -138,10 +138,10 @@ def make_position_lookups(parser_text: str):
 
     Precomputa una sola vez los offsets de los marcadores de página y de
     las secciones sobre el texto completo. Devuelve ``(page_lookup,
-    section_lookup, disposicion_lookup)``, funciones con la firma
-    ``(text, position) -> v`` que el parser usa en ``_enrich``. Esto evita
-    reescanear el texto por cada entrada (O(n) por entrada → O(log n)),
-    lo que colgaba el parsing de boletines de 1800+ páginas.
+    section_lookup, disposicion_lookup, tomo_lookup)``, funciones con la
+    firma ``(text, position) -> v`` que el parser usa en ``_enrich``. Esto
+    evita reescanear el texto por cada entrada (O(n) por entrada → O(log
+    n)), lo que colgaba el parsing de boletines de 1800+ páginas.
     """
     import bisect as _bisect
 
@@ -163,6 +163,21 @@ def make_position_lookups(parser_text: str):
         for pat, tipo in boletin_header._DISPOSICION_PATTERNS
         for m in pat.finditer(parser_text)
     ]
+
+    # Tomos: cabecera "Tomo N/M" marca el inicio de cada tomo. Solo la
+    # primera ocurrencia de cada número cuenta (el índice repite "Tomo
+    # 01/22"; el último tomo a veces repite su cabecera en la última
+    # página). Cada ocurrencia marca el arranque de un tomo válido.
+    tomo_items: list[tuple[int, int]] = []
+    seen_tomo: set[int] = set()
+    for m in boletin_header._TOMO_START_RE.finditer(parser_text):
+        num = int(m.group(1))
+        if num in seen_tomo:
+            continue
+        seen_tomo.add(num)
+        tomo_items.append((m.start(), num))
+    tomo_items.sort()
+    tomo_starts = [o for o, _ in tomo_items]
 
     # Timeline combinada de TODOS los headers de sección (con estatus o
     # con disposición implícita): la disposición vigente se "apaga" al
@@ -193,7 +208,13 @@ def make_position_lookups(parser_text: str):
         kind, value = all_items[j][1], all_items[j][2]
         return value if kind == "disp" else None
 
-    return page_lookup, section_lookup, disposicion_lookup
+    def tomo_lookup(text: str, position: int):
+        i = _bisect.bisect_right(tomo_starts, max(0, position)) - 1
+        if i < 0:
+            return None
+        return boletin_header._arabic_to_roman(tomo_items[i][1])
+
+    return page_lookup, section_lookup, disposicion_lookup, tomo_lookup
 
 
 # ── Pipeline principal ─────────────────────────────────────────
@@ -328,12 +349,13 @@ def process_pdf(
         # Parser multi-formato. Precomputamos índices página y sección una
         # sola vez (O(log n) por entrada en vez de O(n), que colgaba el
         # parsing en boletines de 1800+ páginas).
-        page_lookup, section_lookup, disposicion_lookup = make_position_lookups(parser_text)
+        page_lookup, section_lookup, disposicion_lookup, tomo_lookup = make_position_lookups(parser_text)
 
         parser = MarcaEntryParser(
             page_lookup=page_lookup,
             section_lookup=section_lookup,
             disposicion_lookup=disposicion_lookup,
+            tomo_lookup=tomo_lookup,
         )
         entries, stats = parser.parse_with_stats(parser_text)
 

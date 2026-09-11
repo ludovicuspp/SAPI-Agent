@@ -230,6 +230,7 @@ class BoletinEntryOut(BaseModel):
     boletin_id: int
     expediente: str
     marca: Optional[str] = None
+    tomo: Optional[str] = None
     class_nice: Optional[int] = None
     clase_especial: Optional[str] = None
     titular: Optional[str] = None

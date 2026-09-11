@@ -47,6 +47,7 @@ def _entry_to_out(e: db.BoletinEntryRow) -> BoletinEntryOut:
         boletin_id=e.boletin_id,
         expediente=e.expediente,
         marca=e.marca,
+        tomo=e.tomo,
         class_nice=e.class_nice,
         clase_especial=e.clase_especial,
         titular=e.titular,

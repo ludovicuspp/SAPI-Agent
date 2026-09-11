@@ -69,6 +69,12 @@ NOMBRE_MARCA_RE = re.compile(
     re.IGNORECASE,
 )
 
+# `TRAMITANTE: <apoderado/agente>` al cierre del bloque de la entrada.
+TRAMITANTE_RE = re.compile(
+    r"TRAMITANTE\s*:?\s*(?P<tramitante>[^\n]+)",
+    re.IGNORECASE,
+)
+
 # Marcador de sección con marca figurativa.
 DESCRIPCION_ETIQUETA_RE = re.compile(
     r"DESCRIPCION DE ETIQUETA", re.IGNORECASE,

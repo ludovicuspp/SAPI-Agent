@@ -14,6 +14,7 @@ from scripts.parsers.patterns.disposiciones import extract as extract_disposicio
 from scripts.parsers.patterns.pattern_a import extract as extract_a
 from scripts.parsers.patterns.pattern_b import extract as extract_b
 from scripts.parsers.patterns.pattern_c import extract as extract_c
+from scripts.parsers.patterns.lapse import lapse_for_entry
 
 
 @dataclass
@@ -28,6 +29,7 @@ class MarcaEntry:
     tramitante: Optional[str] = None  # apoderado/agente; se llena vía Hermes
     disposicion: Optional[str] = None  # texto de la resolución (pattern D)
     tipo_disposicion: Optional[str] = None  # DisposicionTipoLiteral
+    tomo: Optional[str] = None  # tomo del boletín donde aparece (romano)
     pais: Optional[str] = None
     fecha_inscripcion: Optional[str] = None  # ISO 8601 (YYYY-MM-DD)
     estatus: Optional[str] = None  # PUBLICADA, CONCEDIDA, NEGADA, ...
@@ -38,6 +40,8 @@ class MarcaEntry:
     es_lema: bool = False
     productos_servicios: Optional[str] = None
     fuente_parsing: str = "pattern_a"
+    lapse_dias_override: Optional[int] = None  # leído del boletín
+    lapse_dias_source: Optional[str] = None  # fuente del override
 
 
 @dataclass
@@ -68,6 +72,7 @@ class MarcaEntryParser:
         page_lookup: Optional[callable] = None,
         section_lookup: Optional[callable] = None,
         disposicion_lookup: Optional[callable] = None,
+        tomo_lookup: Optional[callable] = None,
     ) -> None:
         """``page_lookup(text, position) -> int`` mapea una posición de
         carácter a número de página. Si es None, ``page`` queda None.
@@ -79,10 +84,14 @@ class MarcaEntryParser:
         posición al tipo de disposición implícito en la sección (p.ej.
         devoluciones forma vs fondo). Si es None, ``tipo_disposicion``
         queda solo lo que traigan los patterns.
+
+        ``tomo_lookup(text, position) -> str | None`` mapea una posición al
+        tomo del boletín (en romano). Si es None, ``tomo`` queda None.
         """
         self._page_lookup = page_lookup
         self._section_lookup = section_lookup
         self._disposicion_lookup = disposicion_lookup
+        self._tomo_lookup = tomo_lookup
 
     def parse(self, text: str) -> list[MarcaEntry]:
         """Devuelve la lista de entradas deduplicada por expediente."""
@@ -174,8 +183,24 @@ class MarcaEntryParser:
         return list(seen.values())
 
     def _enrich(self, text: str, entries: list[MarcaEntry]) -> None:
-        """Asigna ``page`` y ``estatus`` a cada entry usando los lookups."""
-        if not (self._page_lookup or self._section_lookup):
+        """Asigna ``page``, ``tomo``, ``estatus`` y ``lapse_dias_override``.
+
+        El ``lapse_dias_override`` se extrae de la propia ``disposicion``
+        de la entry. Si la cabecera de la sección lo anuncia con un plazo
+        distinto al default legal (p.ej. "DIEZ (10) DÍAS HÁBILES" en
+        caducidades), se cruza con ``lapse_dias_for_entry`` en
+        ``scripts/lapsos.py`` al reconstruir las alertas.
+        """
+        for entry in entries:
+            if entry.disposicion:
+                d, source = lapse_for_entry(entry.disposicion, None)
+                if d is not None:
+                    entry.lapse_dias_override = d
+                    entry.lapse_dias_source = source
+        if not (
+            self._page_lookup or self._section_lookup
+            or self._disposicion_lookup
+        ):
             return
         for entry in entries:
             if not entry.excerpt:
@@ -185,6 +210,8 @@ class MarcaEntryParser:
                 continue
             if self._page_lookup:
                 entry.page = self._page_lookup(text, idx)
+            if self._tomo_lookup:
+                entry.tomo = self._tomo_lookup(text, idx)
             if self._section_lookup:
                 entry.estatus = self._section_lookup(text, idx)
             if self._disposicion_lookup and not entry.tipo_disposicion:

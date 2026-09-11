@@ -53,10 +53,12 @@ python -m scripts.cli init-db
 | Listar WL | `python -m scripts.cli list-watchlist --user-email … [--only-active]` |
 | Listar PF | `python -m scripts.cli list-portfolio --user-email …` |
 | Detecciones | `python -m scripts.cli list-detections --user-email … [--limit N]` |
+| Reprocesar marcas | `python -m scripts.cli extract-entries [--boletin-id N …]` — reusa `extraction_json`, **no** re-ejecuta pdfplumber |
 | PDF e2e | `python -m scripts.cli process-boletin PATH --user-email … [--notify]` |
 | Digest | `python -m scripts.cli send-digest --user-email …` |
 | Stats | `python -m scripts.cli stats --user-email …` |
 | Alertas | `python -m scripts.cli metrics-check` (RNF-27; para cron/timer) |
+| Lapsos | `python -m scripts.cli rebuild-alerts` (recalcula fechas) · `backfill-lapse-days` (rellena `lapse_dias_override` desde el boletín) |
 | API dev | `uvicorn api.main:app --reload --port 8000` |
 | API prod | unidad `sapi-api.service` (no adivinar el binario) |
 | Dash dev | `cd dashboard && npm run dev` (`:5173`; proxy `/api` → `:8000`) |
@@ -168,6 +170,18 @@ suele ser cap del proxy, no del backend.
   `role ∈ {admin, propietario, empresa}` (`agent` solo legacy en BD).
   Estatus: `EstatusLiteral` en `scripts/schemas.py`. No inventes valores.
 - Dedupe detections: UNIQUE `(boletin_id, expediente, watchlist_id)`.
+- **`boletin_entries`** = capa fuente neutral (TODAS las marcas extraídas del
+  boletín, sin `user_id`) distinta de `detections` (multi-tenant, solo las que
+  matchean watchlist/portfolio). El dashboard de un boletín muestra
+  `boletin_entries`, no detecciones.
+- **Un PDF = varios tomos** (~100 págs por tomo; BPI 653 = 22, 654 = 18, 655 =
+  25). ``boletines.tomo`` es engañoso: guarda el primer match ("I"). El tomo
+  real por marca está en ``boletin_entries.tomo``, derivado de la cabecera de
+  inicio ``Tomo N/M`` (primera página de cada tomo). ``make_position_lookups``
+  devuelve 4 tuplas: ``(page, section, disposicion, tomo)``.
+- ``boletines_entries_list`` ordena por ``page`` (orden del PDF en el boletín),
+  **no** por clase/marca. No lo cambies a orden alfanumérico: rompe la lectura
+  página a página.
 - Patrón de parser nuevo → `scripts/parsers/patterns/` + test en
   `tests/test_patterns.py`.
 - Migraciones de schema (`scripts/db.py`): para reconstruir una tabla

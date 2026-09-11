@@ -237,3 +237,203 @@ def test_derivar_estado_pendiente_en_fecha():
     a = SimpleNamespace(estado="pendiente", fecha_limite="2026-09-15")
     assert derivar_estado(a, hoy=date(2026, 9, 9)) == "pendiente"
     assert dias_restantes(a, hoy=date(2026, 9, 9)) == 6
+
+
+# ── Defaults derivados de la LPI/LOPA ───────────────────────────
+
+
+class TestLapseDefaultsFromLpi:
+    """Los defaults publicados en ``scripts/lapsos.py`` deben coincidir
+    con los plazos de los artículos de la LPI/LOPA reimpresos por SAPI."""
+
+    def test_pago_concesion_30_dias(self):
+        d = [x for x in DEFAULT_LAPSOS if x["key"] == "pago_concesion"][0]
+        assert d["dias_habiles"] == 30
+        assert "art. 83" in d["label"]
+
+    def test_subsanar_forma_30_dias(self):
+        d = [x for x in DEFAULT_LAPSOS if x["key"] == "subsanar_forma"][0]
+        assert d["dias_habiles"] == 30
+
+    def test_recurso_negacion_15_dias_lopa(self):
+        d = [x for x in DEFAULT_LAPSOS if x["key"] == "recurso_negacion"][0]
+        assert d["dias_habiles"] == 15
+        assert "LOPA" in d["label"]
+
+    def test_recurso_inadmisible_15_dias(self):
+        d = [x for x in DEFAULT_LAPSOS if x["key"] == "recurso_inadmisible"][0]
+        assert d["dias_habiles"] == 15
+
+    def test_recurso_caducidad_10_dias(self):
+        d = [x for x in DEFAULT_LAPSOS if x["key"] == "recurso_caducidad"][0]
+        assert d["dias_habiles"] == 10
+
+
+# ── Parser de lapsos desde el boletín ───────────────────────────
+
+
+class TestLapseParser:
+    def test_treinta_dias_habiles_en_disposicion(self):
+        from scripts.parsers.patterns.lapse import lapse_for_entry
+        d, src = lapse_for_entry(
+            "DEVUELTA DENTRO DE UN LAPSO DE TREINTA (30) DÍAS HÁBILES",
+            None,
+        )
+        assert d == 30
+        assert src == "regex_disposicion"
+
+    def test_diez_dias_en_seccion(self):
+        from scripts.parsers.patterns.lapse import lapse_for_entry
+        d, src = lapse_for_entry(
+            "comparecencia ante la Taquilla Integral dentro del lapso de diez (10) días",
+            None,
+        )
+        assert d == 10
+        assert src == "regex_disposicion"
+
+    def test_sin_plazo_cae_a_fallback_lpi(self):
+        from scripts.parsers.patterns.lapse import lapse_for_entry
+        d, src = lapse_for_entry(
+            "RESUELVE declarar SIN LUGAR el recurso interpuesto",
+            None,
+            fallback_lpi=15,
+        )
+        assert d == 15
+        assert src == "fallback_lpi"
+
+    def test_sin_plazo_ni_fallback_devuelve_none(self):
+        from scripts.parsers.patterns.lapse import lapse_for_entry
+        d, src = lapse_for_entry("texto sin plazo", None)
+        assert d is None
+        assert src == "none"
+
+    def test_quince_dias_habiles_texto_lpi(self):
+        from scripts.parsers.patterns.lapse import lapse_for_entry
+        d, _ = lapse_for_entry(
+            "dentro del plazo de quince (15) días hábiles a contar desde la publicación",
+            None,
+        )
+        assert d == 15
+
+
+# ── Override por entry leído del boletín ────────────────────────
+
+
+class TestLapseOverride:
+    def test_override_en_boletin_entry_prevalece_sobre_default(
+        self, tmp_db, uid
+    ):
+        """Una entrada con ``lapse_dias_override`` explícito (leído del
+        boletín) debe ganar sobre el default legal de ``lapse_config``."""
+        from scripts.lapsos import lapse_dias_for_detection
+
+        bid = db.boletines_create(
+            tmp_db, uid, "b.pdf", "/tmp/b.pdf", "9" * 64
+        )
+        tmp_db.execute(
+            "UPDATE boletines SET fecha_publicacion='2026-09-01' WHERE id=?",
+            (bid,),
+        )
+        did = _det(tmp_db, uid, bid, tipo="CONCESION")
+        # Override del boletín: SAPI publica en este caso 45 días.
+        tmp_db.execute(
+            "INSERT INTO boletin_entries("
+            " boletin_id, expediente, disposicion, lapse_dias_override,"
+            " lapse_dias_source) VALUES (?,?,?,?,?)",
+            (bid, "2026-001111",
+             "PAGO DENTRO DE CUARENTA Y CINCO (45) DÍAS HÁBILES",
+             45, "regex_disposicion"),
+        )
+        tmp_db.commit()
+        det = tmp_db.execute(
+            "SELECT * FROM detections WHERE id=?", (did,)
+        ).fetchone()
+        dias, src = lapse_dias_for_detection(tmp_db, det, default=30)
+        assert dias == 45
+        assert src == "regex_disposicion"
+
+    def test_sin_override_cae_a_default(self, tmp_db, uid):
+        from scripts.lapsos import lapse_dias_for_detection
+
+        bid = db.boletines_create(
+            tmp_db, uid, "b.pdf", "/tmp/b.pdf", "8" * 64
+        )
+        did = _det(tmp_db, uid, bid, tipo="CONCESION")
+        tmp_db.commit()
+        det = tmp_db.execute(
+            "SELECT * FROM detections WHERE id=?", (did,)
+        ).fetchone()
+        dias, src = lapse_dias_for_detection(tmp_db, det, default=30)
+        assert dias == 30
+        assert src == "lapse_config"
+
+    def test_rebuild_aplica_override(self, tmp_db, uid):
+        bid = db.boletines_create(
+            tmp_db, uid, "b.pdf", "/tmp/b.pdf", "7" * 64
+        )
+        tmp_db.execute(
+            "UPDATE boletines SET fecha_publicacion='2026-09-01' WHERE id=?",
+            (bid,),
+        )
+        _det(tmp_db, uid, bid, tipo="CONCESION")
+        tmp_db.execute(
+            "INSERT INTO boletin_entries("
+            " boletin_id, expediente, lapse_dias_override, lapse_dias_source)"
+            " VALUES (?,?,?,?)",
+            (bid, "2026-001111", 10, "regex_disposicion"),
+        )
+        tmp_db.commit()
+        rebuild_alerts_for_boletin(tmp_db, bid)
+        a = db.alerts_list_for_user(tmp_db, uid)[0]
+        assert a.dias_habiles == 10
+
+
+# ── Migración de defaults desde el placeholder 30 ──────────────
+
+
+class TestMigrateLapseDefaults:
+    def test_actualiza_defaults_viejos(self, tmp_db):
+        """Una BD con los defaults placeholder (30) los cambia a los
+        nuevos valores legales."""
+        from scripts.db import _migrate_lapse_defaults
+        tmp_db.execute("DELETE FROM lapse_config")
+        tmp_db.executemany(
+            "INSERT INTO lapse_config(key, label, dias_habiles,"
+            " default_dias_habiles) VALUES (?,?,?,?)",
+            [
+                ("pago_concesion", "Pago (placeholder)", 30, 30),
+                ("recurso_negacion", "Recurso (placeholder)", 30, 30),
+                ("recurso_inadmisible", "Inadm (placeholder)", 30, 30),
+                ("recurso_caducidad", "Caduc (placeholder)", 30, 30),
+                ("subsanar_forma", "Subs forma (placeholder)", 30, 30),
+                ("subsanar_fondo", "Subs fondo (placeholder)", 30, 30),
+                ("oposicion", "Oposicion (placeholder)", 30, 30),
+            ],
+        )
+        tmp_db.commit()
+        _migrate_lapse_defaults(tmp_db)
+        tmp_db.commit()
+        cfg = {r["key"]: r["dias_habiles"] for r in tmp_db.execute(
+            "SELECT key, dias_habiles FROM lapse_config"
+        ).fetchall()}
+        assert cfg["pago_concesion"] == 30  # sigue siendo 30
+        assert cfg["recurso_negacion"] == 15  # actualizado
+        assert cfg["recurso_inadmisible"] == 15
+        assert cfg["recurso_caducidad"] == 10
+
+    def test_no_pisa_edicion_manual(self, tmp_db):
+        from scripts.db import _migrate_lapse_defaults
+        tmp_db.execute("DELETE FROM lapse_config")
+        # El admin bajó pago_concesion a 5 días.
+        tmp_db.execute(
+            "INSERT INTO lapse_config(key, label, dias_habiles,"
+            " default_dias_habiles) VALUES (?,?,?,?)",
+            ("pago_concesion", "Pago custom", 5, 30),
+        )
+        tmp_db.commit()
+        _migrate_lapse_defaults(tmp_db)
+        tmp_db.commit()
+        cfg = tmp_db.execute(
+            "SELECT dias_habiles FROM lapse_config WHERE key='pago_concesion'"
+        ).fetchone()
+        assert cfg["dias_habiles"] == 5  # NO se toca

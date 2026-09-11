@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS boletin_entries (
     boletin_id INTEGER NOT NULL REFERENCES boletines(id) ON DELETE CASCADE,
     expediente TEXT NOT NULL,
     marca TEXT,
+    tomo TEXT,
     class_nice INTEGER,
     clase_especial TEXT,
     titular TEXT,
@@ -156,6 +157,8 @@ CREATE TABLE IF NOT EXISTS boletin_entries (
     source TEXT,
     excerpt TEXT,
     entry_json TEXT,
+    lapse_dias_override INTEGER,
+    lapse_dias_source TEXT,
     UNIQUE(boletin_id, expediente)
 );
 CREATE INDEX IF NOT EXISTS idx_be_boletin ON boletin_entries(boletin_id);
@@ -300,6 +303,10 @@ def init_db(db_path: str | Path) -> None:
         from scripts.lapsos import DEFAULT_LAPSOS
 
         lapse_config_seed(conn, DEFAULT_LAPSOS)
+        # Sincroniza los defaults legales (LPI/LOPA) si veníamos del
+        # placeholder anterior. Solo actúa si ``dias_habiles`` ==
+        # ``default_dias_habiles`` (i.e. el usuario no lo tocó).
+        _migrate_lapse_defaults(conn)
         conn.commit()
 
 
@@ -334,6 +341,9 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("detections", "matched_with", "TEXT"),
         # Gemelo digital: tramitante visible por entrada del boletín.
         ("boletin_entries", "tramitante", "TEXT"),
+        # Gemelo digital: tomo del boletín donde aparece la marca
+        # (los PDF abarcan varios tomos; el tomo es por página/entrada).
+        ("boletin_entries", "tomo", "TEXT"),
         # Gemelo digital: disposición administrativa (resolución SAPI) por
         # entrada y por detección. ``tipo_disposicion`` es un conjunto
         # cerrado documentado en scripts/schemas.py (DisposicionTipoLiteral).
@@ -367,6 +377,12 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("watchlist", "match_family", "INTEGER NOT NULL DEFAULT 0"),
         ("watchlist", "kind", "TEXT NOT NULL DEFAULT 'marca'"),
         ("detections", "risk_score", "REAL"),
+        # Lapsos legales leídos del propio boletín (regex sobre el texto
+        # de la disposicion o la cabecera de la sección). Si está, gana
+        # sobre el default de ``lapse_config``. ``lapse_dias_source``
+        # documenta de dónde salió (regex match / fallback LPI).
+        ("boletin_entries", "lapse_dias_override", "INTEGER"),
+        ("boletin_entries", "lapse_dias_source", "TEXT"),
         ("portfolio", "last_boletin_id", "INTEGER"),
         ("portfolio", "last_boletin_period", "TEXT"),
         ("portfolio", "updated_at", "TEXT NOT NULL DEFAULT ''"),
@@ -774,6 +790,44 @@ def _migrate_detections_match_kind_conflict(conn: sqlite3.Connection) -> None:
     finally:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA legacy_alter_table = OFF")
+
+
+def _migrate_lapse_defaults(conn: sqlite3.Connection) -> None:
+    """Sincroniza ``lapse_config.dias_habiles`` con los defaults legales
+    publicados en ``scripts/lapsos.py`` (arts. 71/72/77/83 LPI y art. 90
+    LOPA) cuando el valor actual es el placeholder anterior (30 días).
+
+    No pisa ediciones manuales: si ``dias_habiles`` ya difiere del
+    placeholder y de ``default_dias_habiles``, se respeta. Si coincide
+    con el placeholder antiguo (30) o con un default conocido, se
+    actualiza al nuevo valor legal.
+
+    Idempotente: al re-ejecutar sin nuevos defaults, no hace nada.
+    """
+    # Import diferido: lapsos.py importa db.py en init_db para sembrar.
+    from scripts.lapsos import DEFAULTS_BY_KEY
+
+    rows = conn.execute(
+        "SELECT key, dias_habiles, default_dias_habiles"
+        " FROM lapse_config"
+    ).fetchall()
+    for r in rows:
+        new_default = DEFAULTS_BY_KEY.get(r["key"])
+        if new_default is None:
+            continue
+        new_dias = new_default["dias_habiles"]
+        current = r["dias_habiles"]
+        original = r["default_dias_habiles"]
+        # Si el usuario nunca lo tocó (current == original) y el original
+        # es el placeholder anterior (todos 30 o cualquiera de los viejos
+        # defaults documentados), actualizamos al nuevo default legal.
+        if current != new_dias and current == original:
+            conn.execute(
+                "UPDATE lapse_config"
+                " SET dias_habiles = ?, default_dias_habiles = ?,"
+                " updated_at = datetime('now') WHERE key = ?",
+                (new_dias, new_dias, r["key"]),
+            )
 
 
 @contextmanager
@@ -1610,6 +1664,7 @@ class BoletinEntryRow:
     boletin_id: int
     expediente: str
     marca: Optional[str] = None
+    tomo: Optional[str] = None
     class_nice: Optional[int] = None
     clase_especial: Optional[str] = None
     titular: Optional[str] = None
@@ -1628,6 +1683,8 @@ class BoletinEntryRow:
     source: Optional[str] = None
     excerpt: Optional[str] = None
     entry_json: Optional[str] = None
+    lapse_dias_override: Optional[int] = None
+    lapse_dias_source: Optional[str] = None
 
 
 def _entry_from_row(
@@ -1647,6 +1704,7 @@ def _entry_insert_values(
         "boletin_id": boletin_id,
         "expediente": getattr(e, "expediente", None),
         "marca": getattr(e, "marca", None),
+        "tomo": getattr(e, "tomo", None),
         "class_nice": getattr(e, "class_nice", None)
         or getattr(e, "clase_niza", None) or getattr(e, "clase", None),
         "clase_especial": getattr(e, "clase_especial", None),
@@ -1673,6 +1731,8 @@ def _entry_insert_values(
             },
             ensure_ascii=False, default=str,
         ),
+        "lapse_dias_override": getattr(e, "lapse_dias_override", None),
+        "lapse_dias_source": getattr(e, "lapse_dias_source", None),
     }
 
 
@@ -1687,14 +1747,16 @@ def boletin_entry_upsert(
     r = _entry_insert_values(boletin_id, e)
     conn.execute(
         "INSERT INTO boletin_entries("
-        " boletin_id, expediente, marca, class_nice, clase_especial,"
+        " boletin_id, expediente, marca, tomo, class_nice, clase_especial,"
         " titular, tramitante, disposicion, tipo_disposicion, pais,"
         " fecha_inscripcion, estatus, page,"
         " is_matcheable, is_figura, is_lema, productos_servicios,"
-        " fuente_parsing, source, excerpt, entry_json)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        " fuente_parsing, source, excerpt, entry_json,"
+        " lapse_dias_override, lapse_dias_source)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         " ON CONFLICT(boletin_id, expediente) DO UPDATE SET"
         " marca=COALESCE(excluded.marca, boletin_entries.marca),"
+        " tomo=COALESCE(excluded.tomo, boletin_entries.tomo),"
         " class_nice=excluded.class_nice,"
         " clase_especial=excluded.clase_especial, titular=excluded.titular,"
         " tramitante=COALESCE(excluded.tramitante, boletin_entries.tramitante),"
@@ -1704,19 +1766,22 @@ def boletin_entry_upsert(
         " fecha_inscripcion=excluded.fecha_inscripcion,"
         " estatus=excluded.estatus, page=excluded.page,"
         " is_matcheable=excluded.is_matcheable,"
-        " is_figura=excluded.is_figura, is_lema=excluded.is_lema,"
+        " is_figura=excluded.is_figura,"
+        " is_lema=excluded.is_lema,"
         " productos_servicios=excluded.productos_servicios,"
         " fuente_parsing=excluded.fuente_parsing, source=excluded.source,"
-        " excerpt=excluded.excerpt, entry_json=excluded.entry_json",
+        " excerpt=excluded.excerpt, entry_json=excluded.entry_json,"
+        " lapse_dias_override=COALESCE(excluded.lapse_dias_override, boletin_entries.lapse_dias_override),"
+        " lapse_dias_source=COALESCE(excluded.lapse_dias_source, boletin_entries.lapse_dias_source)",
         (
             r["boletin_id"], r["expediente"], r["marca"],
-            r["class_nice"], r["clase_especial"], r["titular"],
-            r["tramitante"], r["disposicion"], r["tipo_disposicion"],
-            r["pais"], r["fecha_inscripcion"], r["estatus"],
-            r["page"], r["is_matcheable"], r["is_figura"],
-            r["is_lema"], r["productos_servicios"],
+            r["tomo"], r["class_nice"], r["clase_especial"],
+            r["titular"], r["tramitante"], r["disposicion"],
+            r["tipo_disposicion"], r["pais"], r["fecha_inscripcion"],
+            r["estatus"], r["page"], r["is_matcheable"],
+            r["is_figura"], r["is_lema"], r["productos_servicios"],
             r["fuente_parsing"], r["source"], r["excerpt"],
-            r["entry_json"],
+            r["entry_json"], r["lapse_dias_override"], r["lapse_dias_source"],
         ),
     )
 
@@ -1745,9 +1810,12 @@ def boletines_entries_replace(
 def boletines_entries_list(
     conn: sqlite3.Connection, boletin_id: int
 ) -> list[BoletinEntryRow]:
+    # Orden natural del boletín: por página y dentro de página por id
+    # (el id refleja el orden del parseo → orden en el PDF). No ordenar
+    # por clase/marca: el usuario lee el boletín página a página.
     rows = conn.execute(
         "SELECT * FROM boletin_entries WHERE boletin_id = ?"
-        " ORDER BY class_nice IS NULL, class_nice, marca",
+        " ORDER BY page IS NULL, page, id",
         (boletin_id,),
     ).fetchall()
     return [_entry_from_row(conn, r) for r in rows]

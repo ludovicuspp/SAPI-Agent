@@ -280,6 +280,7 @@ export interface BoletinEntry {
   boletin_id: number;
   expediente: string;
   marca: string | null;
+  tomo: string | null;
   class_nice: number | null;
   clase_especial: string | null;
   titular: string | null;

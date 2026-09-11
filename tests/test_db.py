@@ -364,16 +364,17 @@ class TestBoletines:
         )
 
         class _E:
-            def __init__(self, exp, marca, clase):
+            def __init__(self, exp, marca, clase, page=3, tomo=None):
                 self.expediente = exp
                 self.marca = marca
                 self.class_nice = clase
+                self.tomo = tomo
+                self.page = page
                 self.clase_especial = None
                 self.titular = "Titular A"
                 self.pais = "VE"
                 self.fecha_inscripcion = "2026-01-01"
                 self.estatus = "PUBLICADA"
-                self.page = 3
                 self.matcheable = True
                 self.es_figura = False
                 self.es_lema = False
@@ -383,17 +384,25 @@ class TestBoletines:
                 self.excerpt = "exc"
 
         n = db.boletines_entries_replace(
-            tmp_db, bid, [_E("EXP-1", "Alpha", 5), _E("EXP-2", "Beta", 9)]
+            tmp_db, bid,
+            [
+                _E("EXP-1", "Alpha", 5, page=3, tomo="I"),
+                _E("EXP-4", "Delta", 1, page=1, tomo="I"),
+                _E("EXP-2", "Beta", 9, page=3, tomo="I"),
+            ],
         )
         tmp_db.commit()
-        assert n == 2
+        assert n == 3
         rows = db.boletines_entries_list(tmp_db, bid)
-        assert len(rows) == 2
+        assert len(rows) == 3
+        # Orden natural del boletín: por página (no por clase/marca).
+        assert [r.expediente for r in rows] == ["EXP-4", "EXP-1", "EXP-2"]
         by_exp = {r.expediente: r for r in rows}
         assert by_exp["EXP-1"].marca == "Alpha"
         assert by_exp["EXP-1"].class_nice == 5
         assert by_exp["EXP-1"].titular == "Titular A"
         assert by_exp["EXP-1"].is_matcheable == 1
+        assert by_exp["EXP-1"].tomo == "I"
 
         # Reemplazo: elimina las viejas y deja solo las nuevas.
         n2 = db.boletines_entries_replace(
