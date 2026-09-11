@@ -119,6 +119,24 @@ async def metrics(
         ).fetchall()
     }
 
+    # ── Verificación Hermes (Fase 4) y falsos positivos (RNF-04) ──
+    counts["detections_by_verdict"] = {
+        row["hermes_verdict"] or "pending": row["n"]
+        for row in conn.execute(
+            "SELECT hermes_verdict, COUNT(*) AS n FROM detections GROUP BY hermes_verdict"
+        ).fetchall()
+    }
+    vrow = conn.execute(
+        "SELECT COUNT(*) AS total,"
+        " SUM(CASE WHEN hermes_verdict='confirmed' THEN 1 ELSE 0 END) AS confirmed,"
+        " SUM(CASE WHEN hermes_verdict='discarded' THEN 1 ELSE 0 END) AS discarded"
+        " FROM detections WHERE hermes_verdict IS NOT NULL"
+    ).fetchone()
+    total_v = (vrow["confirmed"] or 0) + (vrow["discarded"] or 0)
+    counts["false_positive_rate_pct"] = (
+        round((vrow["discarded"] or 0) * 100.0 / total_v, 2) if total_v else 0.0
+    )
+
     # ── Actividad reciente (últimas 24 h) ─────────────────────────
     counts["ultimas_24h"] = {
         "boletines": conn.execute(
@@ -151,5 +169,10 @@ async def metrics(
         }
     else:
         counts["detections_por_boletin"] = {"min": 0, "max": 0, "avg": 0}
+
+    # ── Alertas de métricas fuera de rango (RNF-27) ───────────────
+    from scripts.config import get_settings
+    from scripts.monitoring import compute_metric_alerts
+    counts["alerts"] = compute_metric_alerts(conn, get_settings())
 
     return counts

@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from scripts.config import get_settings
 
-from api.middleware import ApiVersioningMiddleware
+from api.middleware import ApiVersioningMiddleware, RateLimitMiddleware
 from api.routers import (
     alerts,
     auth,
@@ -88,6 +88,8 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="API para monitoreo de marcas SAPI Venezuela",
     )
+    _app.add_middleware(RateLimitMiddleware)
+    _app.add_middleware(ApiVersioningMiddleware)
     _app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origins_list,
@@ -107,9 +109,6 @@ def create_app() -> FastAPI:
     _app.include_router(summary.router, prefix="/api/summary", tags=["summary"])
     _app.include_router(export.router, prefix="/api/export", tags=["export"])
     _app.include_router(metrics.router, prefix="/api/admin/metrics", tags=["metrics"])
-
-    # Versionado de API: /api/v0/* se mapea a /api/* (compat).
-    _app.add_middleware(ApiVersioningMiddleware)
 
     @_app.get("/api/health")
     async def health() -> dict:

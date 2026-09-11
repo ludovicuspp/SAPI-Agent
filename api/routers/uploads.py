@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 import sqlite3
@@ -136,7 +135,7 @@ async def upload_boletin(
 async def ws_progress(
     websocket: WebSocket,
     boletin_id: int,
-    user: Optional[db.UserRow] = Depends(get_ws_user),
+    user: db.UserRow | None = Depends(get_ws_user),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> None:
     """WebSocket que envía eventos de progreso de un boletin_id.

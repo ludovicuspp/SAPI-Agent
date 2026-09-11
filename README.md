@@ -120,9 +120,12 @@ logs).
 
 - **Fases 1-5** completas y desplegadas en producción
   ([`https://marcas.solutechve.net`](https://marcas.solutechve.net)).
+- **Endgame (Ramas A-H)**: RF-22/24/25/31 y RNF-17/26/27 completas
+  (rate limiting, verificación Hermes, monitoreo con alertas). Ver
+  [`Specs/`](Specs/00-overview.md#estado-del-proyecto).
 - **CI/CD** con GitHub Actions (pull-based, ver
   [`AGENTS.md`](AGENTS.md#ci-githubworkflowsciyml)).
-- **226 tests pytest + 37 tests Vitest**, todos verdes.
+- **433 tests pytest + 45 tests Vitest**, todos verdes.
 - **Specs/** documenta el estado real del proyecto (sincronizado con
   el código en cada release).
 

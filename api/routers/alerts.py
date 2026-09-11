@@ -26,8 +26,8 @@ router = APIRouter()
 
 @router.get("", response_model=list[AlertOut])
 async def list_alerts(
-    estado: Optional[str] = None,
-    boletin_id: Optional[int] = None,
+    estado: str | None = None,
+    boletin_id: int | None = None,
     limit: int = 200,
     user: db.UserRow = Depends(get_current_user),
     conn: sqlite3.Connection = Depends(get_db),

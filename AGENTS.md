@@ -56,6 +56,7 @@ python -m scripts.cli init-db
 | PDF e2e | `python -m scripts.cli process-boletin PATH --user-email … [--notify]` |
 | Digest | `python -m scripts.cli send-digest --user-email …` |
 | Stats | `python -m scripts.cli stats --user-email …` |
+| Alertas | `python -m scripts.cli metrics-check` (RNF-27; para cron/timer) |
 | API dev | `uvicorn api.main:app --reload --port 8000` |
 | API prod | unidad `sapi-api.service` (no adivinar el binario) |
 | Dash dev | `cd dashboard && npm run dev` (`:5173`; proxy `/api` → `:8000`) |

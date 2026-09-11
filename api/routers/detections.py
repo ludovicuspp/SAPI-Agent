@@ -2,8 +2,6 @@
 verificación Hermes (Fase 4)."""
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException
 import sqlite3
 
@@ -22,7 +20,7 @@ router = APIRouter()
 @router.get("", response_model=list[DetectionOut])
 async def list_detections(
     limit: int = 100,
-    boletin_id: Optional[int] = None,
+    boletin_id: int | None = None,
     include_discarded: bool = False,
     user: db.UserRow = Depends(get_current_user),
     conn: sqlite3.Connection = Depends(get_db),

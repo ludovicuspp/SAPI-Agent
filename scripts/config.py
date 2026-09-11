@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     admin_email: str = ""
     admin_password: str = ""
 
+    # Rate limiting (RNF-17): ventana fija en memoria, sin deps externas.
+    rate_limit_login_per_min: int = 10
+    rate_limit_upload_per_hour: int = 20
+
+    # Monitoreo (RNF-04 / RNF-27): umbrales para alertas.
+    false_positive_threshold_pct: int = 20
+    hermes_queue_threshold: int = 50
+    error_rate_threshold_pct: int = 50
+
     @field_validator("jwt_secret")
     @classmethod
     def _warn_default_secret(cls, v: str) -> str:

@@ -29,6 +29,30 @@ set -euo pipefail
 # "command not found" al dispararse desde el timer.
 export PATH="/home/luisv/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
+_notify_deploy_failure() {
+  local summary="${1:-deploy falló}"
+  # Llama a send_event de la propia app; si SMTP no está configurado o
+  # el módulo falla, degrada a log silencioso (|| true siempre).
+  python3 - << PY || true
+import os, socket
+os.chdir("/home/luisv/SAPI-Agent")
+from scripts.config import get_settings
+cfg = get_settings()
+to = cfg.alert_emails_list
+if not to or not cfg.smtp_configured:
+    print("SMTP no configurado; se omite email de fallo.")
+    raise SystemExit(0)
+from scripts.notifiers.email_smtp import send_event
+host = socket.gethostname()
+send_event(
+    kind="fallo_sistema",
+    to_addresses=to,
+    context={"summary": """${summary}""", "host": host, "log_tail": """$(tail -n 10 "$LOG_FILE")"""},
+)
+PY
+}
+trap '_notify_deploy_failure "deploy falló"' ERR
+
 REPO_DIR="/home/luisv/SAPI-Agent"
 LOG_FILE="/var/log/sapi-pull.log"
 LOCK_FILE="/home/luisv/data/sapi-pull.lock"
@@ -64,6 +88,7 @@ echo "head=$HEAD_NOW deployed=${DEPLOYED:-<ninguno>}"
 
 if [ "$HEAD_NOW" = "$DEPLOYED" ]; then
   echo "Ya desplegado; nada que hacer."
+  trap - ERR
   exit 0
 fi
 
@@ -91,10 +116,13 @@ sleep 2
 # Health-check local: solo si pasa marcamos el deploy como bueno.
 if curl -sf http://127.0.0.1:8000/api/health >/dev/null; then
   echo "Health OK"
+  trap - ERR  # ya no hay errores posibles; desactivamos el notify.
   echo "$HEAD_NOW" > "$DEPLOYED_MARKER"
   echo "[$(date -u +%FT%TZ)] sapi-pull: done ($HEAD_NOW)"
 else
   echo "Health FAIL; ver journalctl (marcador NO actualizado)"
   sudo -n journalctl -u sapi-api.service -n 30 --no-pager || true
+  _notify_deploy_failure "Health check falló tras reinicio"
+  trap - ERR  # ya notificamos; evita re-disparo del trap por 'exit 1'.
   exit 1
 fi

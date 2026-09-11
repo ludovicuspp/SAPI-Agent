@@ -456,6 +456,28 @@ def cmd_verify_scan(args):
         conn.close()
 
 
+def cmd_metrics_check(args):
+    """Evalúa umbrales de monitoreo (RNF-27) y notifica por email las
+    alertas de severidad alta. Diseñado para un cron/timer periódico."""
+    from scripts.monitoring import compute_metric_alerts, send_metric_alerts
+
+    cfg, conn = _load_conn()
+    try:
+        alerts = compute_metric_alerts(conn, cfg)
+        if not alerts:
+            print("Sin alertas de métricas fuera de rango.")
+            return
+        print(f"{len(alerts)} alerta(s) de métricas fuera de rango:")
+        for a in alerts:
+            print(
+                f"  [{a['severity']}] {a['metric']}: {a['value']} "
+                f"(umbral {a['threshold']})"
+            )
+        send_metric_alerts(alerts, cfg=cfg)
+    finally:
+        conn.close()
+
+
 def cmd_send_digest(args):
     cfg, conn = _load_conn()
     try:
@@ -644,6 +666,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("stats", help="Estadísticas del usuario.")
     s.add_argument("--user-email", required=True)
 
+    sub.add_parser(
+        "metrics-check",
+        help="Evalúa umbrales de monitoreo y notifica alertas (RNF-27).",
+    )
+
     return p
 
 
@@ -666,6 +693,7 @@ def main(argv: list[str] | None = None) -> int:
         "send-digest": cmd_send_digest,
         "verify-scan": cmd_verify_scan,
         "stats": cmd_stats,
+        "metrics-check": cmd_metrics_check,
     }
     dispatch[args.cmd](args)
     return 0

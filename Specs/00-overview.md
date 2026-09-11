@@ -43,9 +43,12 @@ conflictos en menos de 24 h tras la publicación.
 | Rol | Capacidades |
 |---|---|
 | **`admin`** | CRUD de usuarios, ver todos los datos, configurar watchlists/portfolio de cualquier agente |
-| **`agent`** | CRUD de sus propios watchlists/portfolio/boletines, ver solo sus detecciones |
+| **`propietario`** | CRUD de sus watchlists/portfolio/boletines, ver solo sus detecciones |
+| **`empresa`** | Igual que `propietario` (sujeto a las mismas reglas de aislamiento) |
+| **`agent`** | Legado en BD; `role ∈ {admin, propietario, empresa}` desde Fase 3 |
 
-`Role = Literal["admin", "agent"]` en `scripts/schemas.py:17`.
+`Role = Literal["admin", "propietario", "empresa"]` en
+`scripts/schemas.py` (`agent` solo legacy en BD).
 
 ## Capas de la aplicación
 
@@ -69,7 +72,14 @@ Detalle en `04-arquitectura.md`.
 
 - **Fases 1-5** completas y desplegadas en producción
   (`https://marcas.solutechve.net`).
+- **Endgame (Ramas A-H)**: RF-17/18/20/21/22/24/25/31 y
+  RNF-04(medición)/17/26/27 implementados; queda RF-23 (SMTP real)
+  pendiente de credenciales.
 - **CI/CD** con GitHub Actions (pull-based, no SSH directo).
-- **186 tests** pytest + 32 Vitest, todos verdes.
+- **433 tests** pytest + 45 Vitest, todos verdes (CI: 4 skipped).
+
+Pendientes reales: RF-23 (entregar email aviso de fallo de deploy
+requiere `SMTP_USER`/`SMTP_PASSWORD` reales), baselines de RNF-01/03/04
+(medición con boletines reales + veredictos Hermes acumulados).
 
 Ver `README.md` y `AGENTS.md` para el detalle operacional.

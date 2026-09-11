@@ -29,6 +29,9 @@ const fakeMetrics = {
   detections_by_source: { pdfplumber_text: 3, hermes_vision: 2 },
   detections_by_confidence: { high: 4, medium: 1 },
   detections_by_match_kind: { similar: 5 },
+  detections_by_verdict: { confirmed: 4, discarded: 1 },
+  false_positive_rate_pct: 20,
+  alerts: [] as { metric: string; value: number; threshold: number; severity: string }[],
   ultimas_24h: { boletines: 1, detections: 2, scans_ok: 5, scans_error: 1 },
   detections_por_boletin: { min: 1, max: 3, avg: 1.67 },
 };
@@ -108,5 +111,24 @@ describe("MonitoringPage", () => {
     await waitFor(() => {
       expect(screen.getAllByText(/Sin datos/).length).toBeGreaterThan(0);
     });
+  });
+
+  it("muestra banner de alertas cuando una métrica sale de rango", async () => {
+    mockRequest.mockResolvedValueOnce({
+      ...fakeMetrics,
+      alerts: [
+        { metric: "false_positive_rate", value: 40, threshold: 20, severity: "high" },
+      ],
+    });
+    render(
+      <MemoryRouter>
+        <Monitoring />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Alertas de métricas fuera de rango/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/false_positive_rate/)).toBeInTheDocument();
+    expect(screen.getByText(/40 \/ umbral 20/)).toBeInTheDocument();
   });
 });

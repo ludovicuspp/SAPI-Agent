@@ -35,12 +35,13 @@ descripción y estado de implementación.
 | RF-17 | Background task para procesar PDF sin bloquear el upload | Alta | ✅ | `api/routers/uploads.py::_process_boletin_task` |
 | RF-18 | Logging estructurado en `scans_log` (upload/extract/hermes/notify/match) | Media | ✅ | `scripts/db.py::scans_log_record` |
 | RF-19 | `CLI` para operaciones admin: `init-db`, `create-user`, `add-watchlist`, `send-digest`, `stats` | Media | ✅ | `scripts/cli.py` |
-| RF-20 | Módulo de monitoreo en dashboard con métricas (processing time, error rate, etc.) | Media | ⬜ | pendiente — Rama F del grill |
-| RF-21 | Ajuste de umbrales de matching por usuario (override de defaults) | Media | ⬜ | pendiente — Rama G del grill |
-| RF-22 | Carga de boletín desde dashboard (botón + progreso WebSocket) | Alta | 🟡 | UI existe; probar carga real — Rama C |
-| RF-23 | Notificación email de fallos del `pull_deploy.sh` a 2 destinatarios | Baja | ⬜ | bloqueado por SMTP sin credenciales |
-| RF-24 | Revisión por Hermes Vision de detecciones con sospecha de falso positivo | Baja | ⬜ | pendiente — Rama G del grill |
-| RF-25 | Versionado de API: prefijo `/api/v0/` (sustituye `/api/` actual) | Baja | ⬜ | Rama H del grill |
+| RF-20 | Módulo de monitoreo en dashboard con métricas (processing time, error rate, etc.) | Media | ✅ | `api/routers/metrics.py`, `dashboard/src/pages/Monitoring.tsx`, `tests/test_metrics.py` |
+| RF-21 | Ajuste de umbrales de matching por usuario (override de defaults) | Media | ✅ | `scripts/matcher/combined.py::Thresholds.from_user` |
+| RF-22 | Carga de boletín desde dashboard (botón + progreso WebSocket) | Alta | ✅ | `dashboard/src/components/UploadZone.tsx` + `tests/test_api.py::test_upload_valid_pdf` |
+| RF-23 | Notificación email de fallos del `pull_deploy.sh` a 2 destinatarios | Baja | 🟡 | `scripts/pull_deploy.sh` envía `send_event(fallo_sistema)`; pendiente SMTP con credenciales reales |
+| RF-24 | Revisión por Hermes Vision de detecciones con sospecha de falso positivo | Baja | ✅ | `api/routers/detections.py::reverify_with_hermes` + Fase 4 (`tests/test_verify.py`) |
+| RF-25 | Versionado de API: prefijo `/api/v0/` (sustituye `/api/` actual) | Baja | ✅ | `api/middleware.py`, `tests/test_versioning.py` |
+| RF-31 | Cola de verificación Hermes de conflictos borderline (Fase 4) con veredicto binario + motivo; descartados se ocultan y sus alertas pasan a `descartada` | Alta | ✅ | `scripts/matcher/hermes_policy.py`, `api/routers/detections.py`, `tests/test_verify.py` |
 | RF-26 | Soporte para múltiples canales de notificación (Slack, push, SMS) | Baja | 🚫 | descartado por Rama H — solo email |
 | RF-27 | Soporte de idiomas distintos al español | Baja | 🚫 | descartado por Rama H — solo español |
 | RF-28 | Automatización de login en WEBPI (reCAPTCHA v3) | Baja | 🚫 | bloqueado por WEBPI + reCAPTCHA |
@@ -51,9 +52,11 @@ descripción y estado de implementación.
 
 - **RF-15 y RF-16** surgieron de la fase de pruebas como protección
   contra alucinaciones del LLM.
-- **RF-23** depende de configurar `SMTP_USER` y `SMTP_PASSWORD` reales
-  en `.env`. Mientras estén vacíos, el notifier degrada a log silencioso.
-- **RF-24** complementa RF-15: si el usuario sospecha falso positivo,
-  dispara una verificación visual con Hermes.
+- **RF-23** está implementado en `scripts/pull_deploy.sh` (aviso vía
+  `send_event(fallo_sistema)`). Falta configurar `SMTP_USER` y
+  `SMTP_PASSWORD` reales en `.env` para que se entregue.
+- **RF-24** y **RF-31** son la base de reducción de falsos positivos
+  (RNF-04): el matcher Python decide, Hermes solo confirma/descarta
+  con motivación; nunca recalcula similitud.
 - **RF-30** es una **decisión arquitectónica explícita**: el LLM
   solo extrae campos, NUNCA calcula similitud (regla en `AGENTS.md`).

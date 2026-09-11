@@ -21,6 +21,9 @@ interface Metrics {
   detections_by_source: Record<string, number>;
   detections_by_confidence: Record<string, number>;
   detections_by_match_kind: Record<string, number>;
+  detections_by_verdict: Record<string, number>;
+  false_positive_rate_pct: number;
+  alerts: { metric: string; value: number; threshold: number; severity: string }[];
   ultimas_24h: { boletines: number; detections: number; scans_ok: number; scans_error: number };
   detections_por_boletin: { min: number; max: number; avg: number };
 }
@@ -55,6 +58,25 @@ export default function MonitoringPage() {
         <Activity className="h-6 w-6" />
         Monitoreo
       </h1>
+
+      {data.alerts.length > 0 && (
+        <Card className="p-4 border-red-300 bg-red-50">
+          <h2 className="font-semibold mb-2 flex items-center gap-2 text-red-700">
+            <AlertTriangle className="h-5 w-5" />
+            Alertas de métricas fuera de rango
+          </h2>
+          <ul className="text-sm space-y-1">
+            {data.alerts.map((a, i) => (
+              <li key={i} className="flex justify-between">
+                <span className="font-mono">{a.metric}</span>
+                <span className="text-red-700">
+                  {a.value} / umbral {a.threshold}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
         {kpis.map((k) => (
@@ -189,6 +211,27 @@ export default function MonitoringPage() {
               <span className="font-mono text-red-600">{data.ultimas_24h.scans_error}</span>
             </li>
           </ul>
+        </Card>
+
+        <Card className="p-4">
+          <h2 className="font-semibold mb-3">Veredictos Hermes y FP</h2>
+          {Object.keys(data.detections_by_verdict).length === 0 ? (
+            <div className="text-sm text-gray-500">Sin veredictos aún.</div>
+          ) : (
+            <ul className="text-sm space-y-1">
+              {Object.entries(data.detections_by_verdict).map(([k, v]) => (
+                <li key={k} className="flex justify-between">
+                  <span>{k}</span><span className="font-mono">{v}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-3 flex items-center justify-between text-sm">
+            <span className="text-gray-500">Falsos positivos</span>
+            <Badge variant={data.false_positive_rate_pct > 20 ? "destructive" : "secondary"}>
+              {data.false_positive_rate_pct}%
+            </Badge>
+          </div>
         </Card>
       </div>
 

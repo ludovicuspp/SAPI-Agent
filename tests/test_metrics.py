@@ -208,3 +208,135 @@ def test_metrics_ultimas_24h_y_por_boletin(client):
     assert u["scans_error"] == 0
     pb = body["detections_por_boletin"]
     assert pb["min"] == 1 and pb["max"] == 1 and pb["avg"] == 1.0
+
+
+# ── M.7: veredictos Hermes y falsos positivos (Fase 4 / RNF-04) ──
+
+
+def test_metrics_verdicts_y_false_positive_rate(tmp_path: Path, monkeypatch):
+    """El endpoint reporta distribución de veredictos y la tasa de FP."""
+    monkeypatch.setenv("FALSE_POSITIVE_THRESHOLD_PCT", "50")
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+    db_file = tmp_path / "test_metrics_verdict.db"
+    conn = db.connect(db_file)
+    db.init_db(db_file)
+    admin_id = db.users_create(conn, "admin@t.local", auth.hash_password("a1234567"), role="admin")
+    sha = "d" * 64
+    b = db.boletines_create(conn, admin_id, "B.pdf", "/tmp/B.pdf", sha)
+    for i in range(3):
+        db.detections_add(
+            conn, boletin_id=b, user_id=admin_id, mark_name=f"CONF{i}",
+            similarity=0.9, match_kind="conflict",
+            source="pdfplumber_text", confidence="medium",
+            needs_hermes_reverify=1,
+        )
+    db.detections_add(
+        conn, boletin_id=b, user_id=admin_id, mark_name="DISC",
+        similarity=0.8, match_kind="similar",
+        source="pdfplumber_text", confidence="low",
+        needs_hermes_reverify=1,
+    )
+    # En orden: 3 confirmed + 1 discarded (por id).
+    ids = [r["id"] for r in conn.execute("SELECT id FROM detections ORDER BY id").fetchall()]
+    for i, did in enumerate(ids):
+        verdict = "confirmed" if i < 3 else "discarded"
+        db.detections_verify_set(conn, did, verdict, "motivo de prueba")
+    conn.commit()
+    conn.close()
+
+    from api.main import create_app
+    app = create_app()
+    def _override_get_db():
+        c = db.connect(db_file)
+        try:
+            yield c
+        finally:
+            c.close()
+    app.dependency_overrides[get_db] = _override_get_db
+    cli = TestClient(app)
+    token = _token_for(db_file, admin_id, "admin")
+    body = cli.get("/api/admin/metrics", headers={"Authorization": f"Bearer {token}"}).json()
+    assert body["detections_by_verdict"] == {"confirmed": 3, "discarded": 1}
+    assert body["false_positive_rate_pct"] == 25.0
+    assert body["alerts"] == []  # threshold default 20% con 25%... pero cfg nadie lo baja
+
+
+# ── M.8: alertas de métricas fuera de rango (RNF-27) ─────────────
+
+
+def test_metrics_alerts_hermes_queue(tmp_path: Path, monkeypatch):
+    """Con umbral de cola bajo, aparece alerta de hermes_queue_depth."""
+    monkeypatch.setenv("HERMES_QUEUE_THRESHOLD", "0")
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+    db_file = tmp_path / "test_metrics_alerts.db"
+    conn = db.connect(db_file)
+    db.init_db(db_file)
+    admin_id = db.users_create(conn, "admin@t.local", auth.hash_password("a1234567"), role="admin")
+    sha = "e" * 64
+    b = db.boletines_create(conn, admin_id, "B.pdf", "/tmp/B.pdf", sha)
+    db.boletines_mark_extracted(
+        conn, boletin_id=b, pages=1, extraction_payload={"pages": []},
+        bulletin_number=1, period=None,
+        needs_hermes_review=True, entries_matcheables=0,
+    )
+    conn.commit()
+    conn.close()
+
+    from api.main import create_app
+    app = create_app()
+    def _override_get_db():
+        c = db.connect(db_file)
+        try:
+            yield c
+        finally:
+            c.close()
+    app.dependency_overrides[get_db] = _override_get_db
+    cli = TestClient(app)
+    token = _token_for(db_file, admin_id, "admin")
+    body = cli.get("/api/admin/metrics", headers={"Authorization": f"Bearer {token}"}).json()
+    assert any(a["metric"] == "hermes_queue_depth" for a in body["alerts"])
+    get_settings.cache_clear()
+
+
+def test_metrics_alerts_false_positive(tmp_path: Path, monkeypatch):
+    """FP rate sobre el umbral lanza alerta de severidad alta."""
+    monkeypatch.setenv("FALSE_POSITIVE_THRESHOLD_PCT", "10")
+    from scripts.config import get_settings
+    get_settings.cache_clear()
+    db_file = tmp_path / "test_metrics_fp.db"
+    conn = db.connect(db_file)
+    db.init_db(db_file)
+    admin_id = db.users_create(conn, "admin@t.local", auth.hash_password("a1234567"), role="admin")
+    sha = "f" * 64
+    b = db.boletines_create(conn, admin_id, "B.pdf", "/tmp/B.pdf", sha)
+    for i in range(3):
+        db.detections_add(
+            conn, boletin_id=b, user_id=admin_id, mark_name=f"M{i}",
+            similarity=0.9, match_kind="conflict",
+            source="pdfplumber_text", confidence="medium",
+            needs_hermes_reverify=1,
+        )
+    ids = [r["id"] for r in conn.execute("SELECT id FROM detections ORDER BY id").fetchall()]
+    for did in ids:
+        db.detections_verify_set(conn, did, "discarded", "fp")
+    conn.commit()
+    conn.close()
+
+    from api.main import create_app
+    app = create_app()
+    def _override_get_db():
+        c = db.connect(db_file)
+        try:
+            yield c
+        finally:
+            c.close()
+    app.dependency_overrides[get_db] = _override_get_db
+    cli = TestClient(app)
+    token = _token_for(db_file, admin_id, "admin")
+    body = cli.get("/api/admin/metrics", headers={"Authorization": f"Bearer {token}"}).json()
+    assert body["false_positive_rate_pct"] == 100.0
+    fp_alerts = [a for a in body["alerts"] if a["metric"] == "false_positive_rate"]
+    assert fp_alerts and fp_alerts[0]["severity"] == "high"
+    get_settings.cache_clear()
